@@ -1,0 +1,31 @@
+# 下載的原始字典（可用 tools/build_dict.py 重建）
+data/raw/
+# 建出來的字典資料庫
+data/*.sqlite
+data/*.tmp
+# 使用者設定
+config.json
+__pycache__/
+*.pyc
+# 個人資料與紀錄
+vocab/
+logs/
+# 使用者保存的真實截圖（遊戲、漫畫有著作權，不進版控）
+tests/eval/real/
+# 使用者收集的真實截圖（有著作權、檔案大，不進版控）
+testdata/
+# 可重新產生的翻譯批次檔（tools/zh_batches.py export）
+dict_translate/batches/
+# 背景 API 翻譯的原始回覆、進度狀態、停止指令（成果在 dict_translate/zh_api.jsonl，要進版控）
+dict_translate/api_raw/
+dict_translate/api_state.json
+dict_translate/api_stop
+# 下載的模型（漫畫模式的文字偵測等，不進版控）
+data/models/
+# 可重新產生的文法批次檔與匯入報告（tools/grammar_batches.py；成果在 grammar_gen/results/ 與 jplens/jlearn/grammar_rules_extra.jsonl，要進版控）
+grammar_gen/batches/
+grammar_gen/report.txt
+
+# 打包（packaging/build.py）的中間檔與成品
+build/
+dist/
