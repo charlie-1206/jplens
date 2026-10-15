@@ -34,7 +34,7 @@ README = """螢幕查字（jplens）
 你的資料都在這個資料夾裡：config.json（設定）、vocab\\（記錄的單字、句子）、logs\\（紀錄檔）、captures\\（保存的畫面）。
 更新版本時把這幾個複製到新的資料夾就好。
 
-授權：程式碼 Apache-2.0（LICENSE）；字典、模型等資料的來源與授權見 NOTICE.md。
+授權：程式碼 Apache-2.0（LICENSE）；字典、模型等資料的來源與授權見 NOTICE.md；附帶的第三方程式庫（Qt、NVIDIA CUDA 等）見 licenses\ 資料夾。
 """
 
 
@@ -81,6 +81,14 @@ def main():
         print(f"CUDA：從 {src} 複製 {len(CUDA_DLLS)} 個 DLL")
     for n in ("NOTICE.md", "LICENSE"):
         shutil.copy2(ROOT / n, DIST / n)
+    # 第三方程式庫的授權（Qt 的 LGPL 全文、NVIDIA、ONNX Runtime；packaging/licenses/README.txt）
+    lic = DIST / "licenses"
+    shutil.copytree(ROOT / "packaging" / "licenses", lic, dirs_exist_ok=True)
+    import onnxruntime
+    ort_dir = Path(onnxruntime.__file__).parent
+    for n in ("LICENSE", "ThirdPartyNotices.txt"):
+        if (ort_dir / n).exists():
+            shutil.copy2(ort_dir / n, lic / f"onnxruntime-{n}" if n.endswith(".txt") else lic / "onnxruntime-LICENSE.txt")
     (DIST / "使用說明.txt").write_text(README, encoding="utf-8-sig")
 
     print("自我測試（jplens.exe --selftest）…")
