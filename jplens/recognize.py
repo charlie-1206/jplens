@@ -149,36 +149,56 @@ def split_overlap(gray: np.ndarray, vertical: bool) -> list[np.ndarray]:
     重疊 2.2 個字寬保證重疊區裡至少有一個字在兩段都完整，merge_chunks 用它對齊接起來。"""
     if vertical:
         return [c.T for c in split_overlap(gray.T, False)]
-    h, w = gray.shape
+    return [np.ascontiguousarray(gray[:, a:b]) for a, b in overlap_spans(*gray.shape)]
+
+
+def overlap_spans(h: int, w: int) -> list[tuple[int, int]]:
+    """split_overlap 的切法：橫排（高 h、長 w）的行切成的每一段 [a, b)。"""
     max_len = ocr.CHUNK_RATIO * h
     if w <= max_len:
-        return [gray]
+        return [(0, w)]
     ov = OVERLAP * h
     n = int(np.ceil((w - ov) / (max_len - ov)))
     step = (w - ov) / n
-    return [np.ascontiguousarray(gray[:, int(i * step):min(w, int(i * step + step + ov))]) for i in range(n)]
+    return [(int(i * step), min(w, int(i * step + step + ov))) for i in range(n)]
 
 
-def merge_chunks(texts: list[str]) -> str:
-    """把重疊切段的辨識結果接起來：找前一段結尾和下一段開頭相同的部分只留一份。
-    段落邊緣只拍到半個字時會讀成別的字（今 的右半 → 〈ま），所以對齊時容許兩邊各有最多兩個不吻合的字。"""
+BRIDGE = 4.5  # 接縫重讀的長度（字寬的幾倍），以兩段的重疊區為中心
+BRIDGE_GAP = 4  # 和橋對齊時兩邊各容許幾個不吻合的字
+
+
+def merge_pair(out: str, t: str, gap: int = 2) -> str | None:
+    """找 out 結尾和 t 開頭相同的部分只留一份；找不到回傳 None。
+    段落邊緣只拍到半個字時會讀成別的字（今 的右半 → 〈ま），所以對齊時容許兩邊各有最多 gap 個不吻合的字。"""
+    best = None  # (重疊字數, -丟掉的字數, 接好的結果)
+    for k in range(min(6, len(out), len(t)), 0, -1):
+        for ga in range(gap + 1):
+            for gb in range(gap + 1):
+                shared = t[gb:gb + k]
+                if len(shared) == k and len(out) - ga >= k and out[:len(out) - ga].endswith(shared):
+                    cand = (k, -(ga + gb), out[:len(out) - ga] + t[gb + k:])
+                    if best is None or cand[:2] > best[:2]:
+                        best = cand
+        if best is not None:
+            break  # 重疊字數多的優先
+    return best[2] if best else None
+
+
+def merge_chunks(texts: list[str], bridges: dict[int, str] | None = None) -> str:
+    """把重疊切段的辨識結果接起來。bridges：第 i 段和第 i+1 段的接縫重讀的結果（接不起來的接縫才有）。
+    兩段把重疊區的字讀成不同的字（遺憾／遠慮）就找不到相同的部分，原本只能直接相接（遺憾をに遠慮），
+    這時改用以接縫為中心重讀的那張當橋：前一段 → 橋 → 後一段。"""
     out = ""
-    for t in texts:
+    for i, t in enumerate(texts):
         if not out:
             out = t
             continue
-        best = None  # (重疊字數, -丟掉的字數, 接好的結果)
-        for k in range(min(6, len(out), len(t)), 0, -1):
-            for ga in range(3):
-                for gb in range(3):
-                    shared = t[gb:gb + k]
-                    if len(shared) == k and len(out) - ga >= k and out[:len(out) - ga].endswith(shared):
-                        cand = (k, -(ga + gb), out[:len(out) - ga] + t[gb + k:])
-                        if best is None or cand[:2] > best[:2]:
-                            best = cand
-            if best is not None:
-                break  # 重疊字數多的優先
-        out = best[2] if best else textutil.join_lines([out, t])
+        m = merge_pair(out, t)
+        if m is None and bridges and bridges.get(i - 1):
+            # 橋和兩段不同的字（遺憾／遠慮）正好在重疊區，可能比一般接縫多，容許到 4 個字
+            mb = merge_pair(out, bridges[i - 1], BRIDGE_GAP)
+            m = merge_pair(mb, t, BRIDGE_GAP) if mb is not None else None
+        out = m if m is not None else textutil.join_lines([out, t])
     return out
 
 
@@ -367,19 +387,48 @@ class Recognizer:
 
     def read_lines(self, img: np.ndarray, boxes: list[Box]) -> list[str]:
         """同 OcrEngine.read（長行切段、深色底反白、英文幻覺過濾），但所有行一起批次辨識。"""
-        crops, chunks, owner = [], [], []
-        for k, b in enumerate(boxes):
-            crop = _crop(img, b, max(2, b.thickness // 6))
-            crops.append(crop)
-            for c in split_overlap(_gray_for_rec(crop), b.vertical):
-                chunks.append(c)
-                owner.append(k)
-        parts = [[] for _ in boxes]
-        for k, t in zip(owner, self.rec_batch(chunks)):
-            parts[k].append(t)
-        texts = [textutil.clean(merge_chunks(p)) for p in parts]
+        crops = [_crop(img, b, max(2, b.thickness // 6)) for b in boxes]
+        texts = [textutil.clean(t) for t in self.read_long([_gray_for_rec(c) for c in crops],
+                                                           [b.vertical for b in boxes])]
         latin = self.engine._latin(crops)[0] if crops else []  # 回傳 ([(文字, 分數), ...], 耗時)
         return ["" if _hallucinated_latin(la, t) else t for la, t in zip(latin, texts)]
+
+    def read_long(self, grays: list[np.ndarray], verticals: list[bool]) -> list[str]:
+        """每一行（灰階圖）重疊切段後一起批次辨識、接起來。接不起來的接縫（兩段把重疊區讀成不同的字）
+        再批次讀一次以接縫為中心的圖，當成接兩段的橋（merge_chunks）。"""
+        chunks, owner, spans = [], [], []
+        for k, (g, v) in enumerate(zip(grays, verticals)):
+            g = g.T if v else g  # 直排轉成橫排來切，送進模型前再轉回來
+            for a, b in overlap_spans(*g.shape):
+                c = np.ascontiguousarray(g[:, a:b])
+                chunks.append(c.T if v else c)
+                owner.append(k)
+                spans.append((a, b))
+        texts = self.rec_batch(chunks) if chunks else []
+        parts = [[] for _ in grays]
+        idx = [[] for _ in grays]  # 每一行的各段在 chunks 裡的位置
+        for i, (k, t) in enumerate(zip(owner, texts)):
+            parts[k].append(t)
+            idx[k].append(i)
+        bridges, where = [], []
+        for k, (g, v) in enumerate(zip(grays, verticals)):
+            g = g.T if v else g
+            h, w = g.shape
+            for j in range(len(idx[k]) - 1):
+                p, q = idx[k][j], idx[k][j + 1]
+                if not texts[p] or not texts[q] or merge_pair(texts[p], texts[q]) is not None:
+                    continue
+                mid = (spans[q][0] + spans[p][1]) / 2  # 重疊區的中間
+                a, b = max(0, int(mid - BRIDGE * h / 2)), min(w, int(mid + BRIDGE * h / 2))
+                c = np.ascontiguousarray(g[:, a:b])
+                bridges.append(c.T if v else c)
+                where.append((k, j))
+        found = [{} for _ in grays]
+        if bridges:
+            for (k, j), t in zip(where, self.rec_batch(bridges)):
+                found[k][j] = t
+            log.info("接縫重讀 %d 處", len(bridges))
+        return [merge_chunks(p, f) if p else "" for p, f in zip(parts, found)]
 
     def detect_screen(self, img: np.ndarray) -> list[Box]:
         """反白模式：偵測整個螢幕的文字行（不先縮圖；RapidOCR 內部會把長邊限制在 2000）。
@@ -453,7 +502,7 @@ class Recognizer:
     def read_segment_parts(self, img: np.ndarray, lines, segs) -> list[str]:
         """每個片段各自的文字（還沒接起來；讀振假名時要用每欄的文字對字格，見 ruby.py）。"""
         from .layout import cross_pad  # layout 也 import 這個模組，放在這裡避免循環 import
-        chunks, owner = [], []
+        grays, verts = [], []
         for k, s in enumerate(segs):
             ln = lines[s.line]
             x0, y0, x1, y1 = ln.rect(s.a, s.b)
@@ -471,14 +520,17 @@ class Recognizer:
                 crop = img[cy0:min(H, y1 + hi), max(0, x0 - pa):min(W, x1 + pb)]
                 crop = _clear_margins(crop, y0 - cy0, y1 - cy0, False)
             if crop.size == 0:
+                grays.append(None)
+                verts.append(False)
                 continue
-            for c in split_overlap(_gray_for_rec(crop), ln.vertical):
-                chunks.append(c)
-                owner.append(k)
-        parts = [[] for _ in segs]
-        for k, t in zip(owner, self.rec_batch(chunks) if chunks else []):
-            parts[k].append(t)
-        return [merge_chunks(p) if p else "" for p in parts]
+            grays.append(_gray_for_rec(crop))
+            verts.append(ln.vertical)
+        keep = [i for i, g in enumerate(grays) if g is not None]
+        texts = self.read_long([grays[i] for i in keep], [verts[i] for i in keep])
+        out = [""] * len(segs)
+        for i, t in zip(keep, texts):
+            out[i] = t
+        return out
 
     def recognize(self, img: np.ndarray, mode: str = "blocks") -> list[Block]:
         if mode == "whole":

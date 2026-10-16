@@ -43,6 +43,10 @@ def test_merge_chunks():
     assert merge_chunks(parts) == "部長代理の臨時リーダーを務めさせていただきます。頑張ります！"
     assert merge_chunks(["委員会の人が、", "人が、部活会議", "活会議に出す書"]) == "委員会の人が、部活会議に出す書"
     assert merge_chunks(["一段だけ"]) == "一段だけ"
+    # 兩段把重疊區讀成不同的字（遺憾／遠慮）：沒有橋只能直接相接，有接縫重讀的結果就用它當橋
+    parts = ["のはまことに遺憾を", "に遠慮なのですが。"]
+    assert merge_chunks(parts) == "のはまことに遺憾をに遠慮なのですが。"
+    assert merge_chunks(parts, {0: "ことに遺憾なの"}) == "のはまことに遺憾なのですが。"
 
 
 def test_text_selection():

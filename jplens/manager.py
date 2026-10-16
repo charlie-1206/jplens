@@ -467,7 +467,7 @@ class ExportDialog(QDialog):
             rb.setText(f"{text}　{len(self._filter(recs))}{self.unit}")
         sel = self._selected()
         marked = sum(1 for r in sel if r.get("marked"))
-        self.hint.setText(f"其中重點單字 {marked} 個，匯出時寫成 isMarked: 1，在單字 App 裡會是標記的單字。")
+        self.hint.setText(f"其中重點單字 {marked} 個。")
         self.ok.setText(f"匯出 {len(sel)}{self.unit}")
         self.ok.setEnabled(bool(sel))
 

@@ -8,10 +8,10 @@ import ctypes
 import ctypes.wintypes as wt
 import re
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 from .words import WordInfo
 
@@ -180,36 +180,120 @@ def scaled_style(scale: float) -> str:
     return re.sub(r"font-size: (\d+)px", lambda m: f"font-size: {round(int(m.group(1)) * scale)}px", STYLE)
 
 
+class FlowLayout(QLayout):
+    """由左而右排，放不下就換行（底部對齊每一行）。比一行還寬的項目（會自動換行的長文法名稱）縮到一行寬。
+    結果視窗的單字列用它：字、讀音、級數、詞性太長時換到下一行，不會把整個清單撐得比視窗寬
+    （撐寬時右邊的「記錄」按鈕被切掉，按下按鈕後清單還會被捲到左邊）。"""
+
+    def __init__(self, hspace=6, vspace=2):
+        super().__init__()
+        self._items = []
+        self._h, self._v = hspace, vspace
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        return s
+
+    @staticmethod
+    def _natural_width(it) -> int:
+        """會自動換行的 QLabel 的 sizeHint 寬度是 Qt 猜的（常比一行還窄），改用整行文字的寬度。"""
+        lb = it.widget()
+        if isinstance(lb, QLabel) and lb.wordWrap():
+            m = lb.contentsMargins()
+            return lb.fontMetrics().horizontalAdvance(lb.text()) + m.left() + m.right() + 2
+        return it.sizeHint().width()
+
+    def _place(self, rect: QRect, apply: bool) -> int:
+        rows, row, x = [], [], 0
+        for it in self._items:
+            if it.isEmpty():
+                continue
+            w = min(self._natural_width(it), rect.width())
+            if row and x + self._h + w > rect.width():
+                rows.append(row)
+                row, x = [], 0
+            x += (self._h if row else 0) + w
+            row.append((it, w))
+        if row:
+            rows.append(row)
+        y = rect.y()
+        for k, row in enumerate(rows):
+            hs = [it.heightForWidth(w) if it.hasHeightForWidth() else it.sizeHint().height() for it, w in row]
+            line_h = max(hs)
+            x = rect.x()
+            for (it, w), h in zip(row, hs):
+                if apply:
+                    it.setGeometry(QRect(x, y + line_h - h, w, h))  # 底部對齊（大字和小字的基線差不多）
+                x += w + self._h
+            y += line_h + (self._v if k < len(rows) - 1 else 0)
+        return y - rect.y()
+
+
 class WordRow(QFrame):
     def __init__(self, w: WordInfo, saved: bool, on_save, scale: float = 1.0):
         super().__init__()
         self.setObjectName("row")
+        self.w = w
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(2)
 
         top = QHBoxLayout()
+        head = FlowLayout()
         word = QLabel(w.word)
         word.setObjectName("grammar" if w.is_grammar else "word")
-        top.addWidget(word)
+        word.setWordWrap(True)  # 文法名稱很長（〜であれ／〜であろうと（…））時自己換行
+        head.addWidget(word)
         if w.reading and w.reading != w.word:
             rd = QLabel(w.reading)
             rd.setObjectName("reading")
-            top.addWidget(rd)
+            head.addWidget(rd)
         badge = QLabel(w.jlpt)
         badge.setStyleSheet(f"background:{LEVEL_COLORS.get(w.jlpt, '#777')}; color:white; border-radius:3px;"
                             f"padding:0px 5px; font-size:{round(11 * scale)}px;")
-        top.addWidget(badge)
+        head.addWidget(badge)
         pos = QLabel(w.pos)
         pos.setObjectName("pos")
-        top.addWidget(pos)
-        top.addStretch(1)
+        head.addWidget(pos)
+        top.addLayout(head, 1)
         self.btn = QPushButton()
         self.btn.setFixedWidth(82)
         self.btn.setCursor(Qt.PointingHandCursor)
+        self.btn.setFocusPolicy(Qt.NoFocus)
         self.btn.clicked.connect(lambda: on_save(w, self))
         self.set_saved(saved)
-        top.addWidget(self.btn)
+        top.addWidget(self.btn, 0, Qt.AlignTop)
         lay.addLayout(top)
 
         # 冷僻的詞義（排在最後）只有在沒有其他意思時才列出來
@@ -314,10 +398,14 @@ class ResultPopup(QWidget):
     vocab_requested = Signal()  # 右鍵選單「開啟單字本」
 
     def __init__(self, cfg, vocab, attribution: str):
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # 不搶鍵盤焦點（WindowDoesNotAcceptFocus＝WS_EX_NOACTIVATE）：點了視窗裡的按鈕，鍵盤還是留在原本的程式
+        # （按完「記錄」再按空白鍵，YouTube 要繼續播放，而不是按到結果視窗裡的按鈕）。Esc 由全域掛鉤處理。
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                         | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.cfg, self.vocab = cfg, vocab
+        vocab.listeners.append(self._on_vocab_changed)  # 單字本視窗刪除、復原時更新「已記錄」
         self.words: list[WordInfo] = []
         self._drag = None
 
@@ -364,6 +452,14 @@ class ResultPopup(QWidget):
         close.clicked.connect(self.hide)
         head.addWidget(close)
         lay.addLayout(head)
+        self.head = head
+        # 標題列放不下時（視窗窄、字級大）標題改放在這一行，不要和級數選單疊在一起
+        self.title2 = QLabel()
+        self.title2.setObjectName("title")
+        self.title2.hide()
+        lay.addWidget(self.title2)
+        for w in (self.level, self.proper, self.text_btn, self.mode_btn, self.pin, close):
+            w.setFocusPolicy(Qt.NoFocus)
 
         self.text = QLabel()
         self.text.setObjectName("text")
@@ -476,7 +572,7 @@ class ResultPopup(QWidget):
         self.move(x, y)
 
     def show_busy(self, msg="辨識中…"):
-        self.title.setText("查字")
+        self._set_title("查字")
         self.text.setText(msg)
         self.text.setVisible(True)
         self.texts = []
@@ -534,6 +630,19 @@ class ResultPopup(QWidget):
         self.show()
         self.raise_()
 
+    def _set_title(self, text: str):
+        """標題和右邊的控制項放得下就同一行，放不下就把標題移到下一行。"""
+        self.title.setText(text)
+        self.title2.setText(text)
+        others = [self.head.itemAt(i).widget() for i in range(self.head.count())]
+        others = [w for w in others if w is not None and w is not self.title]
+        need = (self.title.sizeHint().width() + sum(max(w.minimumSizeHint().width(), w.minimumWidth()) for w in others)
+                + self.head.spacing() * len(others))
+        m = self.frame_lay.contentsMargins()
+        fits = need <= self.width() - m.left() - m.right() - 2
+        self.title.setVisible(fits)
+        self.title2.setVisible(not fits)
+
     def _clear_list(self):
         while self.list_lay.count():
             item = self.list_lay.takeAt(0)
@@ -556,20 +665,28 @@ class ResultPopup(QWidget):
             self.list_lay.addWidget(head)
             for w in points:
                 self.list_lay.addWidget(WordRow(w, self.vocab.has(w), self._save, self.scale))
+        hidden = len(self.words) - len(shown)
         if not shown:
             empty = QLabel("（沒有符合級數條件的單字）" if self.words else "")
             empty.setObjectName("status")
             self.list_lay.addWidget(empty)
+        elif hidden:  # 寫在清單最後，不放標題列（標題變長會和級數選單疊在一起）
+            note = QLabel(f"另有 {hidden} 個被篩選隱藏（級數、專有名詞）")
+            note.setObjectName("status")
+            self.list_lay.addWidget(note)
         self.list_lay.addStretch(1)
-        hidden = len(self.words) - len(shown)
-        self.title.setText(f"{len(words)} 個單字" + (f"・{len(points)} 文法" if points else "")
-                           + (f"（隱藏 {hidden}）" if hidden else ""))
-        self.title.setMinimumWidth(self.title.sizeHint().width())  # 標題列擠的時候不要截掉字
+        self._set_title(f"{len(words)} 個單字" + (f"・{len(points)} 文法" if points else ""))
         detail = getattr(self, "_detail", "")
         self.status.setText(f"{getattr(self, '_seconds', 0):.2f} 秒" + (f"（{detail}）" if detail else ""))
         self.status.setToolTip("放開滑鼠到出結果實際等了多久。\n"
                                "等版面：按下 Alt 後偵測整個畫面的文字位置還沒做完；辨識：讀字＋查字典")
         self._fit()
+
+    def _on_vocab_changed(self):
+        for i in range(self.list_lay.count()):
+            row = self.list_lay.itemAt(i).widget()
+            if isinstance(row, WordRow):
+                row.set_saved(self.vocab.has(row.w))
 
     def _save(self, w: WordInfo, row: WordRow):
         self.vocab.add(w)

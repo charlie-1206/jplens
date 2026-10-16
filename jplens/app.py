@@ -25,7 +25,7 @@ import traceback
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCursor
-from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from .config import FROZEN, ROOT, Config
 from .ui import BusySpinner, HighlightOverlay, ResultPopup, SelectionFrame, make_icon, native_rect
@@ -37,6 +37,31 @@ LAYOUT_MAX_AGE = 10.0  # 版面（按下 Alt 時擷取的畫面）超過幾秒�
 MIN_BOX = 6  # 框的寬或高小於這個像素數就不讀
 log = logging.getLogger("jplens")
 
+
+def _ask_truth(default: str) -> str | None:
+    """保存畫面時問正確答案；按取消回傳 None。日文沒有空白，要設成任何地方都能換行，否則一整句不會換行。"""
+    from PySide6.QtGui import QTextOption
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout
+    dlg = QDialog()
+    dlg.setWindowTitle("螢幕查字：保存畫面")
+    dlg.setWindowFlag(Qt.WindowStaysOnTopHint)
+    lay = QVBoxLayout(dlg)
+    hint = QLabel("正確答案（照畫面上選到的範圍，改成正確的文字；不確定就清空）：")
+    hint.setWordWrap(True)
+    lay.addWidget(hint)
+    edit = QPlainTextEdit(default)
+    edit.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    edit.setMinimumSize(480, 140)
+    font = edit.font()
+    font.setPointSizeF(font.pointSizeF() * 1.3)
+    edit.setFont(font)
+    lay.addWidget(edit)
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    lay.addWidget(buttons)
+    edit.setFocus()
+    return edit.toPlainText() if dlg.exec() == QDialog.Accepted else None
 
 class Bridge(QObject):
     """掛鉤執行緒、背景執行緒 → Qt 主執行緒（跨執行緒的 signal 會自動排入主執行緒的事件佇列）。"""
@@ -904,10 +929,8 @@ class App:
         import json
         import cv2
         img, texts, info = self._last
-        truth, ok = QInputDialog.getMultiLineText(
-            None, "螢幕查字：保存畫面",
-            "正確答案（照畫面上選到的範圍，改成正確的文字；不確定就清空）：", "\n".join(texts or []))
-        if not ok:
+        truth = _ask_truth("\n".join(texts or []))
+        if truth is None:
             return
         truth = "".join(truth.split()) or None  # 換行、空白不算
         CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
