@@ -379,7 +379,7 @@ class App:
         b.click.connect(self.on_click)
         b.tap.connect(self.on_tap)
         b.mode_key.connect(self.cycle_mode)
-        b.escape.connect(self.popup.hide)
+        b.escape.connect(lambda: self.popup.pin.isChecked() or self.popup.hide())  # 釘選時 Esc 不關
         b.hotkey.connect(self.on_hotkey)
         b.ready.connect(self.on_ready)
         b.layout_ready.connect(self.on_layout)

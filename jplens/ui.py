@@ -444,9 +444,9 @@ class ResultPopup(QWidget):
         self.mode_btn.clicked.connect(self._toggle_mode)
         self._show_mode()
         head.addWidget(self.mode_btn)
-        self.pin = self._flat("📌", "釘選：點別的地方時不要自動關閉", checkable=True)
+        self.pin = self._flat("📌", "釘選：點別的地方、按 Esc 時不要自動關閉", checkable=True)
         self.pin.toggled.connect(lambda on: self.pin.setToolTip(
-            "已釘選：點別的地方時不會關閉（再按一次取消）" if on else "釘選：點別的地方時不要自動關閉"))
+            "已釘選：點別的地方、按 Esc 都不會關閉，要按 ✕（再按一次取消釘選）" if on else "釘選：點別的地方、按 Esc 時不要自動關閉"))
         head.addWidget(self.pin)
         close = self._flat("✕", "關閉（Esc）")
         close.clicked.connect(self.hide)
