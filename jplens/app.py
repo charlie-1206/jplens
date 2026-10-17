@@ -398,7 +398,7 @@ class App:
         b.tap.connect(self.on_tap)
         b.mode_key.connect(self.cycle_mode)
         # 釘選、無字幕模式時 Esc 不關
-        b.escape.connect(lambda: self.popup.pin.isChecked() or self.popup.hide())
+        b.escape.connect(self.on_escape)
         b.listen_key.connect(self.toggle_listen)
         # 已經關掉的 Listener 晚到的訊息不要（關掉後執行緒要一下子才結束）
         b.heard.connect(lambda lst, h: lst is self.listener and self.listen_win.add_heard(h.seg, h.text, h.final, h.cont))
@@ -579,8 +579,19 @@ class App:
             self.screen.lines = []
             self.spinner.stop("layout")  # 全黑畫面不偵測，不會有版面結果來停轉圈
 
+    def on_escape(self):
+        """Esc（全域掛鉤，比輸入法還早收到）：正在原文框打字時不關視窗——那個 Esc 是要取消輸入法組字，
+        或由原文框自己處理（結束編輯、鍵盤還回去）；再按一次才關。"""
+        # 掛鉤的 Esc 和視窗收到的 Esc 誰先處理不一定：視窗已經用這個 Esc 結束編輯（還了鍵盤）的話也不關
+        if self.popup.is_editing() or time.monotonic() - self.popup.esc_at < 0.5:
+            return
+        self.popup.pin.isChecked() or self.popup.hide()
+
     def on_hotkey(self):
-        """按下 Alt：反白模式先擷取畫面、在背景偵測版面，按下滑鼠時通常已經好了。"""
+        """按下 Alt：反白模式先擷取畫面、在背景偵測版面，按下滑鼠時通常已經好了。
+        在原文框打字時不擷取（Alt+` 切換輸入法、Alt+Tab 也會按到 Alt）。"""
+        if self.popup.is_editing() or (self.listen_win is not None and self.listen_win.is_editing()):
+            return
         if self.worker.ready and self.drag is None and not self.listening:  # 無字幕模式時不能選取，不用擷取  # 框選也用同一份版面
             self._prepare_screen(*self._cursor())
 
@@ -886,7 +897,10 @@ class App:
             self._show_error("辨識失敗：" + msg.strip().splitlines()[-1])
 
     def on_click(self, x, y):
-        if self.popup.isVisible() and not self.popup.pin.isChecked() and not self.popup.contains_phys(x, y):
+        """點了結果視窗外面就關掉。不關：結果視窗的級數下拉選單、右鍵選單開著（選單常超出視窗範圍）、
+        輸入法正在組字（點的是候選字窗）。"""
+        if (self.popup.isVisible() and not self.popup.pin.isChecked() and not self.popup.contains_phys(x, y)
+                and QApplication.activePopupWidget() is None and not self.popup._composing):
             self.popup.hide()
 
     # ---------------------------------------------------------------- 無字幕模式

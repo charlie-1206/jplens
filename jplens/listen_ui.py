@@ -8,7 +8,9 @@
 - 往上捲去看舊句子時清單停止自動跟到最新，下面出現「↓ 有 n 句新的」，按了才回到最新。
 - 一直講被強制切開的片段（listen.Heard.cont）接在同一行（使用者 10-17：一句話先顯示後半、切開後前半才「插進」兩行中間）。
 - 原文框是「選取的句子」，**跟著正在講的那一行**（講話中的暫定文字也是，使用者 10-17 晚：原文框應該是現在聽到的話，不是上一句）；
-  點過舊句子、查詢過也照樣跟上新的一行。不換的情況：原文框正在改字（還沒按查詢）、清單往上捲在看舊句子（按「↓ 回到最新」再跟上）、
+  點過舊句子、查詢過也照樣跟上新的一行——但點了舊句子之後，要等**點的時候還沒出現的新一行**才換過去
+  （否則正在講的那行每 0.8 秒更新一次，點了舊句子還來不及按查詢就被換掉；2026-10-18 審查）。
+  不換的情況：原文框正在改字、輸入法組字中、鍵盤在原文框裡（點進去了）、清單往上捲在看舊句子（按「↓ 回到最新」再跟上）、
   按了查詢／翻譯但那行還在講（等它講完才查、才翻，這段時間原文框停在那行）。
   查詢結果（單字清單）不會跟著換，「收起查詢結果」那列寫著是哪一句的結果。
 - 譯文存在那一行、顯示在清單裡那一行下面（使用者 10-17 晚：按了翻譯、下一句進來後譯文就不見了）；點回那行，原文框下面也會顯示。
@@ -202,6 +204,9 @@ class ListenWindow(ResultPopup):
         self._queried = ""     # 查詢結果是哪一句的
         self._unseen = 0       # 不跟著捲時，新進來幾句
         self._pending = None   # 按了查詢／翻譯但那行還在講：("query" 或 "translate", 那一行)，講完才做
+        self._hold_seg = None  # 點了舊句子：片段編號到這裡為止的行都不自動換過去（等新的一行）
+        self._query_line = None  # 「查詢」是查哪一行的（結果回來時原文框已經換到別行，就換回目前選的）
+        self._want_y = None    # 使用者放的高度：查詢結果展開時被往上推，收起後回到這裡
         sb = self.area.verticalScrollBar()
         self._anim = QPropertyAnimation(sb, b"value", self)
         self._anim.setDuration(260)
@@ -223,9 +228,25 @@ class ListenWindow(ResultPopup):
 
     # ---------------------------------------------------------------- 查詢結果
     def show_result(self, texts, words, seconds, detail=""):
+        """查詢結果回來。ResultPopup.show_result 會把原文框換成查的字、清掉譯文和還在跑的翻譯；
+        這裡把它們還原（2026-10-18 審查：先按翻譯再按查詢，「翻譯中…」不見；查詢中換了行，原文框變回舊的那句）。"""
         self.list_folded = False  # 查了新的一句：展開看結果
         self._queried = "".join(texts)
+        job, sel, asked = self._job, self._sel, self._query_line
         super().show_result(texts, words, seconds, detail)
+        if sel is None or sel not in self.lines:
+            return
+        if asked is not sel:  # 查詢的時候是別行：原文框留在現在選的這行
+            self.texts = [sel.full]
+            self._show_text(sel.full, editable=True)
+            if sel.translation:
+                self._set_translation(sel.translation)
+        elif job is not None and not job["done"] and job.get("line") is sel:
+            self._job = job  # 翻譯還在跑：結果回來照樣顯示在這裡
+            self._set_translation("翻譯中…", busy=True)
+        elif sel.translation and not self._zh:
+            self._set_translation(sel.translation)
+        self._fit()
 
     def _render(self):
         super()._render()
@@ -254,18 +275,32 @@ class ListenWindow(ResultPopup):
 
     def place(self):
         """上次拖過去的地方；沒有（或那個位置已經不在任何螢幕上）就放主螢幕右下角。"""
+        self._want_y = None
         self._fit()
         pos = self.cfg.listen_pos
         if pos and QGuiApplication.screenAt(QPoint(pos[0] + 20, pos[1] + 20)):
             self.move(pos[0], pos[1])
+            self._want_y = pos[1]
             self._keep_on_screen()
             return
         area = QGuiApplication.primaryScreen().availableGeometry()
         self.move(area.right() - self.width() - 16, area.bottom() - self.height() - 16)
+        self._want_y = self.y()
+
+    def _keep_on_screen(self):
+        """變高時超出螢幕下緣就往上推；變矮時（收起查詢結果）回到使用者放的高度（2026-10-18 審查：收起後懸在螢幕中間）。"""
+        if self._want_y is None:
+            return super()._keep_on_screen()
+        area = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        x = min(max(area.left(), self.x()), area.right() - self.width())
+        y = min(max(area.top(), self._want_y), area.bottom() - self.height())
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
 
     def mouseReleaseEvent(self, e):
         if self._drag is not None:  # 記住拖到哪裡，下次從這裡開始
             self.cfg.listen_pos = [self.x(), self.y()]
+            self._want_y = self.y()
             self.cfg.save()
         super().mouseReleaseEvent(e)
 
@@ -279,7 +314,7 @@ class ListenWindow(ResultPopup):
             ln.deleteLater()
         self.lines, self._sel = [], None
         self._follow, self._unseen = True, 0
-        self._pending = None
+        self._pending = self._hold_seg = self._query_line = None
         self._queried = ""
         self.newer.hide()
         self.waiting.show()
@@ -342,7 +377,9 @@ class ListenWindow(ResultPopup):
         if line is self._sel:
             if not self._editing():
                 self._refresh_sel()
-        elif self._follow and not self._editing() and self._pending is None:
+        elif (self._follow and not self._editing() and self._pending is None
+              and (self._hold_seg is None or line.parts[0][0] > self._hold_seg)):
+            self._hold_seg = None
             self._select(line)
         if self._pending and self._pending[1] is line and not line.partial:
             what = self._pending[0]
@@ -385,12 +422,14 @@ class ListenWindow(ResultPopup):
             self._fit()
 
     def _pick(self, line: Line):
-        """點了一行：放進原文框（下一行出現時照樣自動換成新的；要停在這行就往上捲或開始改字）。"""
+        """點了一行：放進原文框。點的是舊句子時，正在講的那行不會把它換掉，等下一個新的一行出現才換過去。"""
         self._select(line)
+        last = self._last_line()
+        self._hold_seg = last.last_seg if last is not None and last is not line else None
 
     def _editing(self) -> bool:
-        """原文框改過、還沒按查詢。"""
-        return self.text.text().strip() != "\n".join(self.texts).strip()
+        """原文框不要被換掉：改過字還沒查、輸入法組字中、鍵盤在原文框裡（點進去要打字）。"""
+        return self._editing_text() or self.text.hasFocus()
 
     def _last_line(self):
         return self.lines[-1] if self.lines else None
@@ -398,7 +437,7 @@ class ListenWindow(ResultPopup):
     def _waiting_line(self, what: str) -> bool:
         """選取的那行還在講：等講完再查詢／翻譯（原文框改過字就直接用改好的字）。"""
         line = self._sel
-        if line is None or not line.partial or self._editing():
+        if line is None or not line.partial or self._editing_text():
             return False
         self._pending = (what, line)
         if what == "translate":
@@ -411,6 +450,7 @@ class ListenWindow(ResultPopup):
     def _requery(self):
         if self._waiting_line("query"):
             return
+        self._query_line = self._sel
         super()._requery()
 
     def _request(self, src: str, show: bool, force: bool = False):
@@ -464,6 +504,7 @@ class ListenWindow(ResultPopup):
 
     def _jump_latest(self):
         self._follow, self._unseen = True, 0
+        self._hold_seg = None
         self._show_newer()
         self._scroll_to(self.area.verticalScrollBar().maximum())
         last = self._last_line()

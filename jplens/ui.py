@@ -7,6 +7,7 @@ Qt 6 在 Windows 上每個螢幕的左上角邏輯座標＝實體座標，螢幕
 import ctypes
 import ctypes.wintypes as wt
 import re
+import time
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPen, QTextOption
@@ -267,6 +268,7 @@ class TextBox(QTextEdit):
     """結果視窗的原文：可以反白（只記錄其中一段）、也可以直接修改，按 Enter 重查（Shift+Enter 換行）。
     高度跟著內容（fit_height），不出現捲軸。"""
     submitted = Signal()
+    escaped = Signal()  # 按了 Esc（輸入法組字中的 Esc 由輸入法取消組字，不會到這裡）
     height_changed = Signal()  # 用實際寬度重算後高度變了（結果視窗要跟著調整）
 
     def __init__(self):
@@ -280,6 +282,9 @@ class TextBox(QTextEdit):
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key_Return, Qt.Key_Enter) and not e.modifiers() & Qt.ShiftModifier:
             self.submitted.emit()
+            return
+        if e.key() == Qt.Key_Escape:
+            self.escaped.emit()
             return
         super().keyPressEvent(e)
 
@@ -528,6 +533,9 @@ class ResultPopup(QWidget):
         self.text = TextBox()
         self.text.setObjectName("text")
         self.text.submitted.connect(self._requery)
+        self.text.escaped.connect(self._end_edit)  # Esc：結束編輯、鍵盤還回去（再按一次 Esc 才關視窗）
+        self.esc_at = 0.0  # 上次用 Esc 結束編輯的時間（App.on_escape：同一個 Esc 不要接著關視窗）
+        self._composing = False  # 輸入法正在組字（還沒確定的字不在 toPlainText() 裡）
         self.text.textChanged.connect(self._on_text_edited)
         self.text.height_changed.connect(self._fit)
         self.text.viewport().installEventFilter(self)  # 點進去時才接收鍵盤（eventFilter）
@@ -540,6 +548,7 @@ class ResultPopup(QWidget):
         self.trans.setWordWrap(True)
         self.trans.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.trans.hide()
+        self.trans.installEventFilter(self)  # 譯文也可以反白複製（無字幕視窗沒按查詢前 _render 不會跑）
         lay.addWidget(self.trans)
         self._zh = ""  # 目前原文的譯文（記錄原句時一起存）
         self._job = None  # 目前原文的翻譯請求（背景預先翻譯的結果也在這裡）
@@ -616,8 +625,8 @@ class ResultPopup(QWidget):
             w.blockSignals(False)
         self._apply_look()
         self._fit_text()
-        self.text.setVisible(self.cfg.show_text or not self.texts)
-        self.sent_row.setVisible(self.cfg.show_text and bool(self.texts))
+        self.text.setVisible(self._text_shown() or not self.texts)
+        self.sent_row.setVisible(self._text_shown() and bool(self.texts))
         if self.isVisible():
             self._render()
 
@@ -715,8 +724,8 @@ class ResultPopup(QWidget):
         self.words = words
         self.texts = texts
         self._show_text("\n".join(texts), editable=True)
-        self.text.setVisible(self.cfg.show_text or not texts)
-        self.sent_row.setVisible(self.cfg.show_text and bool(texts))
+        self.text.setVisible(self._text_shown() or not texts)
+        self.sent_row.setVisible(self._text_shown() and bool(texts))
         self.sent_btn.setText("＋ 記錄原句")
         self._seconds = seconds
         self._render()
@@ -763,6 +772,10 @@ class ResultPopup(QWidget):
             self._fit()
 
     # ---------------------------------------------------------------- 翻譯
+    def _text_shown(self) -> bool:
+        """原文框、按鈕列、譯文要不要顯示：「文」按鈕；無字幕視窗（query_always）一定顯示（它沒有「文」按鈕）。"""
+        return self.cfg.show_text or self.query_always
+
     def _set_translation(self, zh: str, error: bool = False, busy: bool = False):
         """busy：zh 是「翻譯中…」這類提示，不是譯文（不當成譯文記錄、按鈕先停用）。
         有譯文時按鈕變成「重新翻譯」（不看快取再翻一次）。"""
@@ -771,7 +784,7 @@ class ResultPopup(QWidget):
         self.trans.style().unpolish(self.trans)
         self.trans.style().polish(self.trans)
         self.trans.setText(zh)
-        self.trans.setVisible(bool(zh) and self.cfg.show_text)
+        self.trans.setVisible(bool(zh) and self._text_shown())
         self.trans_btn.setText("↻ 重新翻譯" if self._zh else "翻譯")
         self.trans_btn.setToolTip("不管之前翻過的結果，重新翻譯這一句（會用一次額度），新的譯文取代舊的。" if self._zh else
                                   "翻譯整句（同一句只翻一次）。設定 → 翻譯與 AI 可以改成背景預先翻好或自動翻譯。")
@@ -832,6 +845,8 @@ class ResultPopup(QWidget):
         src, edited = self._current_text()
         if not src:
             return
+        if not edited and not self._composing:
+            self._give_back_focus()  # 沒在改字：按完翻譯鍵盤還回去（空白鍵讓影片繼續播）
         force = bool(self._zh) and not edited
         job = self._job if not force and self._job and self._job["src"] == src and not self._job["err"] else None
         if job and job["done"]:
@@ -925,6 +940,8 @@ class ResultPopup(QWidget):
         text = sel or self._current_text()[0]
         if not text:
             return
+        if not self._editing_text():
+            self._give_back_focus()
         zh = self._zh if not sel else ""  # 只記錄反白的一段時，整句的譯文對不上，不存
         if self.vocab.add_sentence(text, [w.word for w in self.words], zh):
             self.sent_btn.setText("✓ 已記錄原句")
@@ -950,7 +967,11 @@ class ResultPopup(QWidget):
         """在可以反白的字上按下滑鼠：把結果視窗設成前景、焦點給那段字，反白後按 Ctrl+C 才複製得到、原文才能修改
         （視窗平常不搶鍵盤焦點）。使用者剛點了這個視窗，Windows 允許它設成前景。
         原本的前景視窗（瀏覽器）記下來，複製完、重查後、滑鼠離開視窗時還給它（_give_back_focus）。"""
-        if e.type() == QEvent.MouseButtonPress and e.button() == Qt.LeftButton:
+        if e.type() == QEvent.InputMethod and obj is self.text:
+            self._composing = bool(e.preeditString())
+        elif e.type() == QEvent.MouseButtonPress and (e.button() == Qt.LeftButton
+                                                      or (e.button() == Qt.RightButton and obj is self.text.viewport())):
+            # 右鍵：原文框的選單「貼上」後按 Enter 要能重查
             u = ctypes.windll.user32
             hwnd = int(self.winId())
             fg = u.GetForegroundWindow()
@@ -959,9 +980,25 @@ class ResultPopup(QWidget):
             self._allow_focus(True)  # 要在設成前景之前
             u.SetForegroundWindow(wt.HWND(hwnd))
             (self.text if obj is self.text.viewport() else obj).setFocus(Qt.MouseFocusReason)
-        elif e.type() == QEvent.KeyPress and e.matches(QKeySequence.Copy):
-            QTimer.singleShot(0, self._give_back_focus)  # 先讓那段字自己處理複製
+        elif e.type() == QEvent.KeyPress and e.matches(QKeySequence.Copy) and obj is not self.text:
+            QTimer.singleShot(0, self._give_back_focus)  # 先讓那段字自己處理複製（原文框裡複製是在改字，不還）
         return False
+
+    def _editing_text(self) -> bool:
+        """正在原文框打字：改過字還沒重查，或輸入法正在組字（組字中的字不在 toPlainText() 裡，
+        而且候選字窗常常彈在游標底下，觸發「滑鼠離開視窗」——使用者 10-17 的錄影：字被藏起來、不能選字）。"""
+        return self._composing or self.text.text().strip() != "\n".join(self.texts).strip()
+
+    def is_editing(self) -> bool:
+        """結果視窗是前景、鍵盤在原文框（App 用：這時 Esc、Alt 是給原文框／輸入法的）。"""
+        return (self.isVisible() and self.text.hasFocus()
+                and ctypes.windll.user32.GetForegroundWindow() == int(self.winId()))
+
+    def hide(self):
+        # 關掉時鍵盤還給原本的視窗（點進原文框後按 ✕、Esc 關掉）；Windows 自己挑的下一個視窗不一定是它
+        if self.isVisible():
+            self._give_back_focus()
+        super().hide()
 
     def _give_back_focus(self):
         """鍵盤還給點進結果視窗之前的前景視窗（只有結果視窗還是前景時才還，使用者已經點去別的地方就不管）。"""
@@ -993,11 +1030,20 @@ class ResultPopup(QWidget):
         self._allow_focus(False)
         super().hideEvent(e)
 
-    def leaveEvent(self, e):
-        # 原文改到一半（還沒重查）時不還，免得打字打到一半鍵盤跑掉
-        if self.text.text().strip() == "\n".join(self.texts).strip():
-            self._give_back_focus()
-        super().leaveEvent(e)
+    # 滑鼠離開視窗時不還鍵盤（使用者 10-18 決定）：點進原文框、反白文字之後就一直保留，直到 Enter／重查、Esc、
+    # 複製解釋文字、記錄原句、翻譯（沒改字時）、點別的程式、關掉視窗。以前離開就還：點進框還沒打字、
+    # 滑鼠移開就打不了字，輸入法候選字窗彈在游標下也會觸發（組字被藏起來）。代價：點進框後直接按空白鍵會打進框裡。
+
+    def keyPressEvent(self, e):
+        # 反白解釋文字（標籤）時按 Esc：鍵盤還回去（原文框的 Esc 由 TextBox.escaped 處理）
+        if e.key() == Qt.Key_Escape:
+            self._end_edit()
+            return
+        super().keyPressEvent(e)
+
+    def _end_edit(self):
+        self.esc_at = time.monotonic()
+        self._give_back_focus()
 
     def contains_phys(self, x, y) -> bool:
         if not self.isVisible():
