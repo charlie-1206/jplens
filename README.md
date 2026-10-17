@@ -31,6 +31,13 @@ Windows 10／11 64 位元。第一次開啟時 Windows SmartScreen 可能會警�
 | 📌 | 釘選：點畫面其他地方、按 Esc 時不自動關閉（要按 ✕） |
 | Esc、✕、點別的地方 | 關閉結果視窗（釘選時只有 ✕ 能關） |
 
+**無字幕模式**（直播、沒有字幕的動畫）：按 **Alt＋L**（設定 → 查字操作可以換字母）開始，把電腦正在播的聲音即時轉成文字。
+另外開一個無字幕視窗（這段時間不能框選、反白）：聽到的句子一句一句往下排，講話中先顯示灰色的暫定文字、講完換成最終結果；下面的原文框跟著正在講的那句。
+點任何一句放到下面的原文框，按「🔍 查詢」才查字；往上捲看舊句子時不會被新句子打斷，按「↓ 回到最新」再跟上。
+查完字可以按「▾ 收起查詢結果」把單字清單收起來。漏句、切錯時按「💾 保存聲音」存下最近 2 分鐘有聲音的部分（影片停著的時間不算），可以拿來改進。再按一次 Alt＋L 或 ✕ 結束。
+開倍速看影片時，在視窗右上的播放速度選單選一樣的倍數（辨識前先放慢回原速，1.5 倍也準）。講話中按「查詢」「翻譯」會等那句講完再做；譯文留在清單那一句的下面，下一句進來也不會消失。
+語音辨識只用 CPU（約單核的 5～15%）、不佔顯示卡。錄的是整台電腦的聲音（通知音、別的分頁也會錄進去）。
+
 **系統匣選單**（「字」圖示，左鍵或右鍵；可能被收在工作列右下角的「^」裡）：
 - **單字本**：單字／文法／句子分開看；搜尋、篩選（級數、詞性、記錄時間、已學會、重點單字）、排序；
   星號標**重點單字**、標記**已學會**、編輯、刪除（可以復原）。
@@ -136,7 +143,11 @@ repo 裡沒有模型和字典（太大），要先準備：
    只有匯出時需要 `pip install torch transformers manga-ocr`，之後執行查字工具不需要。
 3. **漫畫模式的模型**（要用漫畫模式才需要）：[ogkalu/comic-text-and-bubble-detector](https://huggingface.co/ogkalu/comic-text-and-bubble-detector/tree/main)
    的 `detector.onnx`（NVIDIA 顯示卡用）或 `detector_int8.onnx`（CPU 用），連同 `config.json`、`preprocessor_config.json` 放到 `data/models/ogkalu/`。
-4. （選用，加速）文字偵測模型改吃 uint8：`pip install onnx` 後 `python tools/export_det_onnx.py`。沒做就用 RapidOCR 附的模型。
+4. **無字幕模式的模型**（要用無字幕模式才需要），放到 `data/models/asr/`：
+   - [sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)（`.tar.bz2`，解壓縮成同名資料夾；只用到 `*.int8.onnx` 和 `tokens.txt`）
+   - [silero_vad.onnx](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)（Silero v4，空檔補漏用）
+   - `silero_vad_v6.onnx`：[snakers4/silero-vad v6.2.3](https://github.com/snakers4/silero-vad/tree/v6.2.3/src/silero_vad/data) 的 `silero_vad.onnx` 改名（主要的語音偵測）
+5. （選用，加速）文字偵測模型改吃 uint8：`pip install onnx` 後 `python tools/export_det_onnx.py`。沒做就用 RapidOCR 附的模型。
 
 有 NVIDIA 顯示卡時要找得到 CUDA 12＋cuDNN 9 的程式庫：放在 `data/cuda/`、pip 的 `nvidia-*` 套件，或裝了 PyTorch（cu12 版）時借用它的
 （`jplens/gpu.py`）。找不到會用 CPU。
@@ -165,7 +176,7 @@ python packaging/build.py --no-cuda  # 不帶（沒有 CUDA 的電腦只能用 C
 | `vocab/saved_sentences.jsonl` | 記錄的原句 |
 | `config.json` | 設定（設定視窗會寫入） |
 | `logs/jplens.log` | 執行紀錄（每次查詢的時間、錯誤訊息） |
-| `jplens/` | 程式（`app.py` 主程式、`layout.py`／`inkcols.py` 版面、`recognize.py` 辨識、`words.py` 單字與文法、`manager.py` 單字本、`settings_ui.py` 設定） |
+| `jplens/` | 程式（`app.py` 主程式、`layout.py`／`inkcols.py` 版面、`recognize.py` 辨識、`words.py` 單字與文法、`manager.py` 單字本、`settings_ui.py` 設定、`listen.py`／`listen_ui.py` 無字幕模式） |
 | `tools/` | 建字典、匯出模型、文法規則與字典翻譯的批次工具 |
 | `tests/` | `python -c "import tests.test_core as m; [getattr(m,k)() for k in dir(m) if k.startswith('test_')]"`（需要字典）；`tests/eval/` 是辨識準確率的評估（需要自己的截圖） |
 

@@ -29,3 +29,4 @@ grammar_gen/report.txt
 # 打包（packaging/build.py）的中間檔與成品
 build/
 dist/
+cache/

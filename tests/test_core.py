@@ -397,3 +397,13 @@ def test_fix_angle_bracket_ku():
     assert fix_common_ocr("画〈字〉") == "画〈字〉"                    # 成對的括號不動
     assert fix_common_ocr("太郎〈17歳〉") == "太郎〈17歳〉"
     assert fix_common_ocr("字：〈コマ") == "字：〈コマ"                # 前面不是平假名
+
+
+def test_translation_cache_key():
+    from jplens.ai import cache_key
+    # 只差在引號（含半邊）、句尾標點、刪節號寫法、空白的算同一句
+    same = ["「追いついたよ", "「追いついたよ」", "追いついたよ。", "『追いついたよ…』", "追いついたよ...", " 追いついたよ "]
+    assert len({cache_key(t) for t in same}) == 1
+    # 疑問句、差一個字的不算同一句
+    assert cache_key("追いついたよ？") != cache_key("追いついたよ")
+    assert cache_key("行ける") != cache_key("行けない")

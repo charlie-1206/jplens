@@ -74,6 +74,9 @@ class Bridge(QObject):
     mode_key = Signal(int, int)  # 按住 Alt＋右鍵：切換選取模式
     escape = Signal()
     hotkey = Signal()
+    listen_key = Signal()        # 按住熱鍵＋L：開關無字幕模式
+    heard = Signal(object, object)  # 無字幕模式聽到（一句的暫定或最終文字）：(哪個 Listener, listen.Heard)
+    listen_state = Signal(object, str, bool)  # 無字幕模式的狀態：(哪個 Listener, 訊息, 是否出錯)
     ready = Signal(str)
     layout_ready = Signal(int, object)
     result = Signal(int, object)
@@ -256,6 +259,15 @@ class Worker:
                  sec, len(words), text)
         self.bridge.result.emit(job_id, (texts, words, sec))
 
+    def _do_retext(self, job_id, texts):
+        """使用者在結果視窗改了原文：不用辨識，直接用改好的文字查字。"""
+        t = time.perf_counter()
+        self._submitted.pop(job_id, None)
+        words = self._extract(texts, self.dictionary)
+        sec = time.perf_counter() - t
+        log.info("重查（使用者修改的原文）：%.2f 秒、%d 個單字：%s", sec, len(words), " / ".join(texts))
+        self.bridge.result.emit(job_id, (texts, words, sec))
+
     def _do_whole(self, job_id, img, crop, blank):
         """框選一個對話框大小的範圍：整塊交給 manga-ocr（它就是為「一整個對話框」設計的，振假名會自己忽略；
         漫畫的欄夾著振假名時，偵測模型常把欄切碎、漏欄、兩欄黏成一欄，依行讀會漏字或亂序）。"""
@@ -363,11 +375,17 @@ class App:
         self._dxcam = None     # DXGI 擷取（dxcam）：None＝還沒試、False＝不能用（多螢幕、沒裝、出錯）
         self._dx_last = None   # dxcam 上一次擷取到的畫面（畫面沒變時 grab() 回傳 None，沿用這張）
         self._last = None      # (上一次的圖, 辨識出的文字, 其他資訊)
+        self._corrected = None  # 使用者在結果視窗改過、重查的原文（保存畫面時當正確答案的預設值）
+        self._requery_job = None
         self._t_release = None  # 放開滑鼠的時間（記錄延遲）
         self._pending = None   # 框選放開（或漫畫模式點一下）時版面還沒好：(版面編號, 要接著做的函式, 參數)
         self._move_queued = False  # 反白：已排了一次「更新反白範圍」（滑鼠移動事件合併，算不完不會越積越多）
         self._bubble_warned = False
         self._last_tap = None  # 漫畫模式雙擊判斷：(時間, x, y)
+        self.listener = None   # 無字幕模式（listen.Listener，開啟時才建立）
+        self.listen_win = None  # 無字幕視窗（listen_ui.ListenWindow，第一次開啟時建立）
+        self.listening = False
+        self._requery_target = None  # 重查的結果要顯示在哪個視窗（查字視窗或無字幕視窗）
         self.screen = None     # 反白模式目前的 Screen
         self.drag = None       # 反白模式拖曳中：{"start", "end", "lines", "segs", "box", "pending"}
 
@@ -379,7 +397,12 @@ class App:
         b.click.connect(self.on_click)
         b.tap.connect(self.on_tap)
         b.mode_key.connect(self.cycle_mode)
-        b.escape.connect(lambda: self.popup.pin.isChecked() or self.popup.hide())  # 釘選時 Esc 不關
+        # 釘選、無字幕模式時 Esc 不關
+        b.escape.connect(lambda: self.popup.pin.isChecked() or self.popup.hide())
+        b.listen_key.connect(self.toggle_listen)
+        # 已經關掉的 Listener 晚到的訊息不要（關掉後執行緒要一下子才結束）
+        b.heard.connect(lambda lst, h: lst is self.listener and self.listen_win.add_heard(h.seg, h.text, h.final, h.cont))
+        b.listen_state.connect(self._on_listen_state)
         b.hotkey.connect(self.on_hotkey)
         b.ready.connect(self.on_ready)
         b.layout_ready.connect(self.on_layout)
@@ -388,6 +411,7 @@ class App:
         self.popup.quit_requested.connect(self.quit)
         self.popup.mode_changed.connect(self._sync_mode_menu)
         self.popup.vocab_requested.connect(self.open_manager)
+        self.popup.requery_requested.connect(lambda texts: self._requery(texts, self.popup))
 
         self.tray = QSystemTrayIcon(make_icon())
         self.status_action = QAction("模型載入中…")
@@ -404,6 +428,11 @@ class App:
             act.triggered.connect(lambda _=False, m=mode: self.set_mode(m))
             menu.addAction(act)
             self.mode_actions[mode] = act
+        menu.addSeparator()
+        self.listen_action = QAction(checkable=True)
+        self.listen_action.triggered.connect(lambda _=False: self.toggle_listen())
+        self._listen_text()
+        menu.addAction(self.listen_action)
         menu.addSeparator()
         menu.addAction("單字本…", self.open_manager)
         export = menu.addMenu("匯出")
@@ -428,7 +457,8 @@ class App:
         self.worker = Worker(b, self.dictionary, self.cfg)
         self.hook = SelectionHook(self.cfg.hotkey_vks, b.sel_start.emit, b.sel_move.emit, b.sel_end.emit,
                                   b.sel_cancel.emit, b.click.emit, b.escape.emit, b.hotkey.emit, b.tap.emit,
-                                  b.mode_key.emit if self.cfg.mode_key else None)
+                                  b.mode_key.emit if self.cfg.mode_key else None,
+                                  b.listen_key.emit, ord(self.cfg.listen_key))
         self.hook.start()
         # 前景是比自己高權限的程式（以系統管理員身分執行的遊戲）時，掛鉤收不到按鍵：每個程式提醒一次
         self._elevated_warned: set[str] = set()
@@ -551,7 +581,7 @@ class App:
 
     def on_hotkey(self):
         """按下 Alt：反白模式先擷取畫面、在背景偵測版面，按下滑鼠時通常已經好了。"""
-        if self.worker.ready and self.drag is None:  # 框選也用同一份版面
+        if self.worker.ready and self.drag is None and not self.listening:  # 無字幕模式時不能選取，不用擷取  # 框選也用同一份版面
             self._prepare_screen(*self._cursor())
 
     @staticmethod
@@ -816,8 +846,28 @@ class App:
         self.tray.setToolTip(f"螢幕查字：{msg}\n按住 {hk} {how}")
         self.tray.showMessage("螢幕查字", f"{msg}。按住 {hk} 用滑鼠{how}日文。", QSystemTrayIcon.Information, 3000)
 
+    def _requery(self, texts, target):
+        """target：結果顯示在哪個視窗（查字視窗 popup 或無字幕視窗 listen_win）。"""
+        if not self.worker.ready:
+            target.status.setText("模型還在載入，等一下再按")
+            return
+        self.job_id += 1
+        self._requery_job = self.job_id
+        self._requery_target = target
+        self._t_release = None
+        self.worker.submit("retext", self.job_id, texts)
+
     def on_result(self, job_id, payload):
+        if job_id == self.job_id and job_id == self._requery_job:
+            # 改過的原文：當成「保存畫面」時正確答案的預設值；上一次辨識的結果（_last）不動
+            texts, words, sec = payload
+            target = self._requery_target or self.popup
+            if target is self.popup:
+                self._corrected = "\n".join(texts)
+            target.show_result(texts, words, sec, "查詢" if target is not self.popup else "重查")
+            return
         if job_id == self.job_id:
+            self._corrected = None
             if self._last:
                 self._last = (self._last[0], payload[0], self._last[2])
             self.spinner.stop("query")
@@ -838,6 +888,87 @@ class App:
     def on_click(self, x, y):
         if self.popup.isVisible() and not self.popup.pin.isChecked() and not self.popup.contains_phys(x, y):
             self.popup.hide()
+
+    # ---------------------------------------------------------------- 無字幕模式
+    def _listen_text(self):
+        self.listen_action.setText(f"無字幕模式：聽電腦的聲音轉成文字（{self.cfg.listen_name}）")
+
+    def toggle_listen(self):
+        if self.listening:
+            self.stop_listen()
+        else:
+            self.start_listen()
+
+    def start_listen(self):
+        """無字幕模式：關掉查字視窗、另外開無字幕視窗；這段時間不能框選、反白（Alt＋拖曳照常給底下的程式）。"""
+        from . import listen
+        from .listen_ui import ListenWindow
+        if self.listen_win is None:
+            w = self.listen_win = ListenWindow(self.cfg, self.vocab, self.dictionary.attribution())
+            w.requery_requested.connect(lambda texts: self._requery(texts, w))
+            w.stop_requested.connect(self.stop_listen)
+            w.save_audio_requested.connect(self.save_listen_audio)
+            w.quit_requested.connect(self.quit)
+            w.vocab_requested.connect(self.open_manager)
+            w.speed_changed.connect(self._set_listen_speed)
+        self.listening = True
+        self.listen_action.setChecked(True)
+        self.hook.select_enabled = False
+        self.on_cancel()
+        self.popup.hide()
+        self.listen_win.start(self.cfg.listen_name)
+        if not listen.model_ready():
+            self._on_listen_state(self.listener, f"找不到語音辨識模型（{listen.ASR_DIR}）", True)
+            return
+        if self.listener is None:
+            lst = listen.Listener(lambda h: self.bridge.heard.emit(lst, h),
+                                  lambda msg, err: self.bridge.listen_state.emit(lst, msg, err),
+                                  partial=self.cfg.listen_partial, speed=self.cfg.listen_speed)
+            self.listener = lst
+        self.listener.start()
+
+    def _set_listen_speed(self, speed: float):
+        """無字幕視窗換了播放速度：記住，正在聽的話馬上套用。"""
+        self.cfg.listen_speed = speed
+        self.cfg.save()
+        if self.listener is not None:
+            self.listener.set_speed(speed)
+        log.info("無字幕模式：播放速度 %.2f 倍", speed)
+
+    def stop_listen(self):
+        """結束無字幕模式：關掉無字幕視窗，可以繼續框選、反白。"""
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None  # 停下來的執行緒結束後模型就釋放（約 300 MB），下次開啟重新載入（約 1 秒）
+        self.listening = False
+        self.listen_action.setChecked(False)
+        self.hook.select_enabled = True
+        if self.listen_win is not None:
+            self.listen_win.hide()
+
+    def _on_listen_state(self, lst, msg, error):
+        if lst is not self.listener or self.listen_win is None:
+            return
+        self.listen_win.set_state(msg, error)
+        if error:  # 錄音、辨識停了：視窗留著讓使用者看到原因，按 ✕ 或熱鍵結束
+            self.listener = None
+
+    def save_listen_audio(self):
+        """無字幕視窗的「保存聲音」：最近 2 分鐘有聲音的部分（wav）和這段時間辨識出的句子（同名 txt），當測試資料。"""
+        w = self.listen_win
+        if self.listener is None:
+            w.status.setText("沒有在聆聽，沒有聲音可以存")
+            return
+        folder = CAPTURE_DIR / "audio"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / time.strftime("%Y%m%d_%H%M%S.wav")
+        sec = self.listener.save_recent(path)
+        if not sec:
+            w.status.setText("還沒聽到任何聲音，沒有東西可以存")
+            return
+        log.info("保存無字幕模式的聲音：%s（%.0f 秒）", path, sec)
+        w.status.setText(f"已保存最近 {sec:.0f} 秒的聲音：{path.name}")
+        w.status.setToolTip(str(path))
 
     # ---------------------------------------------------------------- 單字本、設定
     @staticmethod
@@ -895,8 +1026,10 @@ class App:
         """設定視窗改了設定（已寫進 config.json）：讓它馬上生效。"""
         from . import inkcols, layout
         cfg = self.cfg
-        if key == "hotkey":
+        if key in ("hotkey", "listen_key"):
             self.hook.hotkey_vks = list(cfg.hotkey_vks)
+            self.hook.listen_vk = ord(cfg.listen_key)
+            self._listen_text()
             self.tray.setToolTip(f"螢幕查字：{self.status_action.text()}\n按住 {cfg.hotkey_name} 用滑鼠選取日文")
         elif key == "mode_key":
             self.hook.on_mode = self.bridge.mode_key.emit if cfg.mode_key else None
@@ -908,6 +1041,12 @@ class App:
             self.set_mode(cfg.select_mode)
         elif key in ("min_level", "show_proper", "show_text", "font_size", "popup_width"):
             self.popup.sync_from_cfg()
+            if self.listen_win is not None:
+                self.listen_win.sync_from_cfg()
+        elif key == "listen_partial":
+            from . import listen
+            if self.listener is not None and self.listener.tr is not None:
+                self.listener.tr.partial_every = listen.PARTIAL_EVERY if cfg.listen_partial else 0
         elif key == "preload_manga":
             self._preload_bubbles()
         elif key == "vocab_dir":
@@ -929,7 +1068,7 @@ class App:
         import json
         import cv2
         img, texts, info = self._last
-        truth = _ask_truth("\n".join(texts or []))
+        truth = _ask_truth(self._corrected or "\n".join(texts or []))
         if truth is None:
             return
         truth = "".join(truth.split()) or None  # 換行、空白不算
@@ -943,6 +1082,8 @@ class App:
         log.info("保存畫面：%s（正確答案：%s）", path, truth)
 
     def quit(self):
+        if self.listener is not None:
+            self.listener.stop()
         self.hook.stop()
         self.tray.hide()
         self.qapp.quit()
@@ -979,6 +1120,25 @@ def selftest() -> int:
         words = extract([text], Dictionary())
         out.append("單字：" + "、".join(f"{w.word}【{w.reading}】{w.jlpt} {w.meaning}" for w in words[:5]))
         ok = text.replace(" ", "") == sample and bool(words)
+        # 翻譯與講解（不連網）：Gemini 套件、keyring 的 Windows 認證管理員後端都有帶進去
+        import keyring
+        from google import genai  # noqa: F401
+        backend = type(keyring.get_keyring()).__module__
+        out.append(f"Gemini 套件 OK；keyring 後端：{backend}")
+        ok = ok and "Windows" in backend
+        # 無字幕模式（不錄音）：模型、sherpa-onnx、pyaudiowpatch 都有帶進去，辨識一段靜音不會出錯
+        from . import listen
+        import pyaudiowpatch  # noqa: F401
+        tr = listen.Transcriber(48000)
+        tr.feed(np.zeros(48000, np.float32))
+        tr.flush()
+        slow, r = listen.slow_down(np.zeros(48000, np.float32), 48000, 1.5)  # 倍速放慢（打包版沒有 PyAV：調整取樣率）
+        ok = ok and (len(slow) > 60000 or r == 32000)
+        from .listen_ui import ListenWindow
+        ListenWindow(Config(), type("V", (), {"listeners": []})(), "").deleteLater()  # 視窗建得起來
+        out.append(f"無字幕模式：模型 {'OK' if listen.model_ready() else '找不到'}、sherpa-onnx、pyaudiowpatch OK；"
+                   f"倍速放慢用{'PyAV atempo' if listen._atempo_ok else '調整取樣率'}")
+        ok = ok and listen.model_ready()
     except Exception:
         out.append(traceback.format_exc())
         ok = False

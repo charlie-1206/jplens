@@ -11,6 +11,12 @@ sudachidict-core
 jaconv
 huggingface_hub
 dxcam              # 0.3.0；只有一個螢幕時用 DXGI 擷取（約 2 ms，mss 約 35 ms），沒裝也能用
+google-genai       # 2.29.0；整句翻譯、句子講解（Gemini）
+keyring            # 25.7.0；API Key 存在 Windows 認證管理員
+sherpa-onnx        # 1.13.8；無字幕模式的語音偵測、語音辨識（CPU）
+pyaudiowpatch      # 0.2.12.9；無字幕模式錄喇叭的聲音（WASAPI loopback）
+# 選用：av（PyAV 17.1.0）——無字幕模式倍速播放時用 ffmpeg 的 atempo 放慢回原速（比較準）；沒裝會改用調整取樣率。
+#   它附的 FFmpeg 含 x264／x265（GPL），所以打包版不帶（packaging/jplens.spec 的 excludes）。
 
 # 建字典（tools/build_dict.py）
 opencc             # 1.4.2
@@ -19,5 +25,6 @@ opencc             # 1.4.2
 #   torch transformers manga-ocr
 # 只有匯出吃 uint8 的偵測模型時需要（tools/export_det_onnx.py，執行一次；沒匯出照舊用 RapidOCR 附的）：
 #   onnx
-# 只有用 Gemini API 背景翻譯字典時需要（tools/zh_api.py）：
-#   google-genai
+# 只有比較無字幕模式的語音辨識時需要（tools/asr_eval.py、tools/listen_eval.py）：
+#   faster-whisper av psutil
+#   注意：faster-whisper 會順便裝 CPU 版 onnxruntime，要移除後重裝 onnxruntime-gpu（否則可能退回 CPU）

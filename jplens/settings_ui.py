@@ -1,6 +1,6 @@
 """設定視窗：左邊分頁、右邊內容，改了就寫進 config.json 並馬上生效（App.apply_setting）。
 
-分頁：一般（語言〔預留〕、啟動）、查字操作、結果視窗、單字本、翻譯與 AI（整頁預留）、進階、關於。
+分頁：一般（語言〔預留〕、啟動）、查字操作、結果視窗、單字本、翻譯與 AI（Gemini：API Key、翻譯、講解）、進階、關於。
 """
 
 import os
@@ -8,19 +8,21 @@ import sys
 import winreg
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+                               QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from .config import APP_DIR, FONT_SCALES, FROZEN, HOTKEY_NAMES, POPUP_WIDTHS, ROOT
 from .theme import C, JP_FONTS, QSS, badge_style, dark_title_bar
 
 TABS = [("general", "一般", "語言與啟動"), ("lookup", "查字操作", "熱鍵與選取方式"),
         ("popup", "結果視窗", "查字結果要顯示什麼、看起來多大"), ("vocab", "單字本", "記錄存在哪裡、匯出的預設值"),
-        ("ai", "翻譯與 AI", "Gemini 與本地翻譯"), ("advanced", "進階", "辨識的做法與系統狀態"),
+        ("ai", "翻譯與 AI", "Gemini 的 API Key、整句翻譯、句子講解"), ("advanced", "進階", "辨識的做法與系統狀態"),
         ("about", "關於", "版本、授權與資料來源")]
-RESERVED_TABS = {"ai"}
+RESERVED_TABS: set = set()  # 整頁還沒實作的分頁（側邊標「預留」）；翻譯與 AI 2026-10-17 做好了
 CREDITS = [
     ("JMdict（EDRDG）", "英文意思、詞性", "CC BY-SA 4.0"),
     ("Tomoshi 開放資料（Y1Z）", "中文意思", "CC BY-SA 4.0"),
@@ -391,12 +393,21 @@ class SettingsWindow(QWidget):
         g.add("預設選取模式", "反白：沿著文字拖。框選：拖出矩形。漫畫：框住或雙擊對話框。", self.mode_seg)
         self.mode_key_row = g.add("", "依序切換 反白 → 框選 → 漫畫。", self._switch("mode_key"))
         self.spinner_row = g.add("游標旁顯示轉圈", "", self._switch("show_spinner"))
+        g = self._section("無字幕模式")
+        self.listen_row = g.add(
+            "", "把電腦正在播的聲音（直播、動畫）即時轉成文字，放進結果視窗，按「查詢」才查字。"
+                "語音辨識只用 CPU、不佔顯示卡；再按一次結束。",
+            combo([(c, c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], self.cfg.listen_key,
+                  lambda v: (self._set("listen_key", v), self._hotkey_texts())))
+        g.add("邊講邊顯示", "講話中先顯示暫定的文字（灰色），講完換成最終結果。每 0.8 秒重新辨識一次，CPU 約多用單核的 10%；"
+              "關掉就講完一句才出現。", self._switch("listen_partial"))
         self._hotkey_texts()
 
     def _hotkey_texts(self):
         hk = self.cfg.hotkey_name
         self.mode_key_row.title.setText(f"按住 {hk}＋右鍵切換模式")
         self.spinner_row.title.setText(f"按下 {hk} 時游標旁顯示轉圈（畫面分析好就停）")
+        self.listen_row.title.setText(f"開關的按鍵：按住 {hk}＋字母（目前 {self.cfg.listen_name}）")
 
     def _on_hotkey(self, v):
         self._set("hotkey", v)
@@ -467,33 +478,191 @@ class SettingsWindow(QWidget):
         self.vocab_path.setText(str(new))
 
     def _tab_ai(self):
-        hint = QFrame()
-        hint.setObjectName("hint")
-        hl = QHBoxLayout(hint)
-        hl.setContentsMargins(12, 8, 12, 8)
-        hl.addWidget(_label("這一頁先預留位置，標「準備中」的功能還沒實作。", "note", wrap=True))
-        self._v.addWidget(hint)
+        from . import ai
         g = self._section("Gemini")
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(6)
-        key = QLineEdit()
-        key.setEchoMode(QLineEdit.Password)
-        key.setPlaceholderText("準備中：之後在這裡貼上 API Key")
-        key.setEnabled(False)
-        v.addWidget(key)
-        has_env = bool(os.environ.get("GEMINI_API_KEY"))
-        st = _label(("● 已從環境變數 GEMINI_API_KEY 讀到 Key" if has_env else "● 環境變數裡沒有 GEMINI_API_KEY"), "desc")
-        st.setStyleSheet(f"color: {C['ok'] if has_env else C['sub']};")
-        v.addWidget(st)
-        g.add("Gemini API Key", "Key 會存在 Windows 的認證管理員，不會寫進 config.json。", box, reserved=True, stacked=True)
-        g.add("模型", "品質優先，不用 Flash-Lite。", combo([("tbd", "之後列出可用的模型")], "tbd", lambda v: None,
-                                                    enabled=False), reserved=True)
-        g = self._section("整句翻譯")
-        g.add("翻譯方式", "結果視窗多一個「翻譯」按鈕，按了才翻，同一句會記住不重翻。",
-              segmented([("off", "不使用"), ("gemini", "Gemini"), ("local", "本地模型")], "off", lambda v: None,
-                        enabled=False), reserved=True)
+        row = QHBoxLayout()
+        self.key_edit = QLineEdit()
+        self.key_edit.setEchoMode(QLineEdit.Password)
+        self.key_edit.setPlaceholderText("貼上 API Key（Google AI Studio 取得）")
+        row.addWidget(self.key_edit, 1)
+        row.addWidget(_button("儲存", self._save_key))
+        self.key_clear = _button("刪除", self._clear_key)
+        row.addWidget(self.key_clear)
+        v.addLayout(row)
+        st_row = QHBoxLayout()
+        self.key_status = _label("", "desc", wrap=True)
+        st_row.addWidget(self.key_status, 1)
+        self.key_test = _button("測試", self._test_key)
+        self.key_test.setToolTip("翻譯一句「こんにちは」確認 Key 能用（會用掉一次免費額度）")
+        st_row.addWidget(self.key_test)
+        v.addLayout(st_row)
+        g.add("API Key", "存在 Windows 的認證管理員（加密，只有你的 Windows 帳號讀得到），不會寫進 config.json 或紀錄檔。"
+              "沒有存的話用環境變數 GEMINI_API_KEY。", box, stacked=True)
+        self._show_key_status()
+
+        g = self._section("整句翻譯", "結果視窗")
+        g.add("翻譯來源", f"預設用 Google Gemini（{ai.TRANSLATE_MODEL}，上面的 Key）。"
+              "也可以改用任何 OpenAI 相容的服務（Groq、OpenRouter、DeepSeek、OpenAI，或本機的 Ollama、LM Studio）。",
+              segmented([("gemini", "Google Gemini"), ("openai", "自訂服務")], self.cfg.translate_provider,
+                        self._on_provider), stacked=True)
+        self.custom_box = QWidget()
+        cv = QVBoxLayout(self.custom_box)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(6)
+        self.url_edit = QLineEdit(self.cfg.openai_base_url)
+        self.url_edit.setPlaceholderText("網址，例如 https://api.groq.com/openai/v1")
+        self.url_edit.textChanged.connect(lambda t: self._set_custom("openai_base_url", t))
+        cv.addWidget(self.url_edit)
+        self.model_edit = QLineEdit(self.cfg.openai_model)
+        self.model_edit.setPlaceholderText("模型名稱，例如 llama-3.3-70b-versatile")
+        self.model_edit.textChanged.connect(lambda t: self._set_custom("openai_model", t))
+        cv.addWidget(self.model_edit)
+        row = QHBoxLayout()
+        self.okey_edit = QLineEdit()
+        self.okey_edit.setEchoMode(QLineEdit.Password)
+        self.okey_edit.setPlaceholderText("API Key（本機服務可以不填）")
+        row.addWidget(self.okey_edit, 1)
+        row.addWidget(_button("儲存", self._save_okey))
+        self.okey_clear = _button("刪除", self._clear_okey)
+        row.addWidget(self.okey_clear)
+        cv.addLayout(row)
+        st = QHBoxLayout()
+        self.okey_status = _label("", "desc", wrap=True)
+        st.addWidget(self.okey_status, 1)
+        self.okey_test = _button("測試", self._test_custom)
+        self.okey_test.setToolTip("翻譯一句「こんにちは」確認網址、模型、Key 都對（會用掉一次額度）")
+        st.addWidget(self.okey_test)
+        cv.addLayout(st)
+        self.custom_row = g.add("自訂服務", "網址、模型名稱存在 config.json；Key 存在 Windows 認證管理員"
+                                "（沒存的話用環境變數 OPENAI_API_KEY）。", self.custom_box, stacked=True)
+        self._show_okey_status()
+        self._on_provider(self.cfg.translate_provider, save=False)
+        g.add("翻譯時機", "背景預先翻好：查字結果一出來就先翻，按「翻譯」時多半已經好了（每次查字都會用一次額度，翻過的不重翻）。",
+              segmented([("manual", "按了才翻"), ("prefetch", "背景預先翻好"), ("auto", "自動翻並顯示")],
+                        self.cfg.translate_timing, lambda v: self._set("translate_timing", v)), stacked=True)
+        spin = QSpinBox()
+        spin.setRange(1, 50)
+        spin.setSuffix(" 字以上")
+        spin.setValue(self.cfg.prefetch_min_chars)
+        spin.valueChanged.connect(lambda v: self._set("prefetch_min_chars", v))
+        g.add("預先翻譯的長度", "原文（不算標點）至少幾個字才在背景先翻；太短的（「えっ」「うん」）按了才翻。", spin)
+
+        g = self._section("句子講解", "單字本 → 句子")
+        g.add("講解模型", "翻譯、拆解詞與文法、語氣。講解會存起來，之後打開不用再呼叫。",
+              combo(list(ai.EXPLAIN_MODELS.items()), self.cfg.explain_model, lambda m: self._set("explain_model", m)))
+
+    # ---------------------------------------------------------------- 自訂翻譯服務
+    def _on_provider(self, v, save=True):
+        if save:
+            self._set("translate_provider", v)
+        self.custom_row.setVisible(v == "openai")
+
+    def _set_custom(self, key: str, text: str) -> bool:
+        """網址、模型名稱打字就存（config.json 是明文）：看起來像 API Key 的不存（貼錯欄位），網址要 http:// 或 https:// 開頭才存。"""
+        from . import ai
+        t = text.strip()
+        if ai.looks_like_key(t):
+            self._show_okey_status("● 這看起來是 API Key，請貼到下面的 Key 欄位（這一欄會存成明文，所以沒有存）", False)
+            return False
+        if key == "openai_base_url" and t and not t.lower().startswith(("http://", "https://")):
+            self._show_okey_status("● 網址要以 http:// 或 https:// 開頭", False)
+            return False
+        self._set(key, t)
+        self._show_okey_status()
+        return True
+
+    def _show_okey_status(self, msg: str = "", ok: bool | None = None):
+        from . import ai
+        key, src = ai.get_key("openai")
+        if not msg:
+            msg = {"keyring": f"● Key 已存在 Windows 認證管理員（{ai.masked(key)}）",
+                   "env": f"● Key 用環境變數 OPENAI_API_KEY（{ai.masked(key)}）",
+                   "": "● 沒有 Key（本機服務不需要）"}[src]
+            ok = True if src else None
+        self.okey_status.setText(msg)
+        self.okey_status.setStyleSheet(f"color: {C['ok'] if ok else C['sub'] if ok is None else '#e0a080'};")
+        self.okey_clear.setEnabled(src == "keyring")
+
+    def _save_okey(self):
+        from . import ai
+        k = self.okey_edit.text().strip()
+        if not k:
+            return
+        try:
+            ai.set_key(k, "openai")
+        except Exception as e:  # noqa: BLE001
+            self._show_okey_status(f"● 存不進去：{e}", False)
+            return
+        self.okey_edit.clear()
+        self._show_okey_status()
+
+    def _clear_okey(self):
+        from . import ai
+        ai.clear_key("openai")
+        self._show_okey_status()
+
+    def _test_custom(self):
+        from . import ai
+        if not (self._set_custom("openai_base_url", self.url_edit.text())
+                and self._set_custom("openai_model", self.model_edit.text())):
+            return
+        self.okey_test.setEnabled(False)
+        self._show_okey_status("● 測試中…", None)
+        url, model = self.cfg.openai_base_url, self.cfg.openai_model
+
+        def done(zh, err):
+            if not shiboken6.isValid(self):  # 測試中把設定視窗關掉了（WA_DeleteOnClose）
+                return
+            self.okey_test.setEnabled(True)
+            self._show_okey_status(f"● 可以用：こんにちは → {zh}" if not err else f"● {err}", not err)
+        ai.run_async(lambda: ai.openai_chat(url, model, ai.TRANSLATE_PROMPT.format(text="こんにちは")), done)
+
+    def _show_key_status(self, msg: str = "", ok: bool | None = None):
+        from . import ai
+        key, src = ai.get_key()
+        if not msg:
+            msg = {"keyring": f"● 已存在 Windows 認證管理員（{ai.masked(key)}）",
+                   "env": f"● 用環境變數 GEMINI_API_KEY（{ai.masked(key)}）",
+                   "": "● 還沒有設定 Key：翻譯、講解不能用"}[src]
+            ok = bool(src)
+        self.key_status.setText(msg)
+        self.key_status.setStyleSheet(f"color: {C['ok'] if ok else C['sub'] if ok is None else '#e0a080'};")
+        self.key_clear.setEnabled(src == "keyring")
+        self.key_test.setEnabled(bool(src))
+
+    def _save_key(self):
+        from . import ai
+        k = self.key_edit.text().strip()
+        if not k:
+            return
+        try:
+            ai.set_key(k)
+        except Exception as e:  # noqa: BLE001
+            self._show_key_status(f"● 存不進去：{e}", False)
+            return
+        self.key_edit.clear()
+        self._show_key_status()
+
+    def _clear_key(self):
+        from . import ai
+        ai.clear_key()
+        self._show_key_status()
+
+    def _test_key(self):
+        from . import ai
+        self.key_test.setEnabled(False)
+        self._show_key_status("● 測試中…", None)
+
+        def done(zh, err):
+            if not shiboken6.isValid(self):
+                return
+            self._show_key_status()
+            self._show_key_status((f"● 可以用：こんにちは → {zh}" if not err else f"● {err}"), not err)
+        ai.run_async(lambda: ai._generate(ai.TRANSLATE_MODEL, ai.TRANSLATE_PROMPT.format(text="こんにちは")), done)
 
     def _tab_advanced(self):
         g = self._section("辨識")

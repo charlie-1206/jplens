@@ -7,6 +7,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent
+REAZON = ROOT / "data" / "models" / "asr" / "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
 
 datas = [
     (str(ROOT / "data" / "dict.sqlite"), "data"),
@@ -18,6 +19,12 @@ datas = [
     (str(ROOT / "dict_translate" / "zh_api.jsonl"), "dict_translate"),
     (str(ROOT / "jplens" / "jlearn" / "grammar_notes.json"), "jplens/jlearn"),
     (str(ROOT / "jplens" / "jlearn" / "grammar_rules_extra.jsonl"), "jplens/jlearn"),
+    # 無字幕模式（listen.py）：語音偵測、ReazonSpeech 只帶 int8 版（約 160 MB；完整版 600 MB 不帶）
+    (str(ROOT / "data" / "models" / "asr" / "silero_vad.onnx"), "data/models/asr"),
+    (str(ROOT / "data" / "models" / "asr" / "silero_vad_v6.onnx"), "data/models/asr"),
+    (str(REAZON / "tokens.txt"), "data/models/asr/" + REAZON.name),
+    (str(REAZON / "README.md"), "data/models/asr/" + REAZON.name),
+    *[(str(f), "data/models/asr/" + REAZON.name) for f in REAZON.glob("*.int8.onnx")],
     (str(ROOT / "NOTICE.md"), "."),
     (str(ROOT / "LICENSE"), "."),
 ]
@@ -28,13 +35,17 @@ datas += collect_data_files("sudachidict_core")
 # 只有舊的 PyTorch 版 manga-ocr、建字典、匯出模型的工具用得到，打包不帶（torch 一個就好幾 GB）
 excludes = ["torch", "torchvision", "torchaudio", "transformers", "manga_ocr", "huggingface_hub", "fugashi", "unidic_lite",
             "sklearn", "scipy", "pandas", "matplotlib", "tensorflow", "IPython", "jupyter", "notebook", "tkinter",
-            "opencc", "google", "onnx", "pytest", "sympy", "numba", "av"]
+            "opencc", "onnx", "pytest", "sympy", "numba", "av",
+            "faster_whisper", "ctranslate2"]  # 只有 tools/asr_eval.py 用到
 
 a = Analysis(
     [str(ROOT / "packaging" / "jplens_main.py")],
     pathex=[str(ROOT)],
     datas=datas,
-    hiddenimports=collect_submodules("jplens") + collect_submodules("dxcam") + ["comtypes.stream"],
+    # google.genai、keyring 在 ai.py 裡用到時才 import，PyInstaller 看不到，要明列
+    hiddenimports=collect_submodules("jplens") + collect_submodules("dxcam") + ["comtypes.stream"]
+    + collect_submodules("google.genai") + collect_submodules("keyring.backends")
+    + ["sherpa_onnx", "pyaudiowpatch"],  # 無字幕模式（listen.py 開啟時才 import）
     excludes=excludes,
     noarchive=False,
 )

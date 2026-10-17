@@ -212,7 +212,10 @@ def cmd_run(args):
     RAW.mkdir(parents=True, exist_ok=True)
     _, todo = todo_list(args.scope)
     log(f"開始：範圍 {args.scope}，還沒翻 {len(todo)} 個詞，每批 {args.size} 個，每 {args.interval} 秒一批")
-    client = genai.Client()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from jplens.ai import get_key  # 設定視窗存在 Windows 認證管理員的 Key，沒有才用環境變數 GEMINI_API_KEY
+    key, _ = get_key("gemini")
+    client = genai.Client(api_key=key) if key else genai.Client()
     state = load_state()
     count = 0
     while todo and not STOP.exists() and (not args.max_batches or count < args.max_batches):

@@ -170,16 +170,29 @@ class VocabStore:
     def sentences(self) -> list[dict]:
         return _read_jsonl(self.sentence_path)
 
-    def add_sentence(self, text: str, words: list[str]) -> bool:
-        """記錄原句（附上當時列出的單字）；同一句已經記錄過就回傳 False。"""
+    def add_sentence(self, text: str, words: list[str], translation: str = "") -> bool:
+        """記錄原句（附上當時列出的單字、Gemini 的譯文）；同一句已經記錄過就回傳 False。"""
         if any(r.get("text") == text for r in self.sentences()):
             return False
         rec = {"text": text, "words": words, "saved_at": datetime.now().isoformat(timespec="seconds")}
+        if translation:
+            rec["translation"] = translation
         self.sentence_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.sentence_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self._changed()
         return True
+
+    def update_sentence(self, text: str, saved_at: str, **fields) -> bool:
+        """改一句的欄位（單字本句子頁的講解：explanation、explain_model）。"""
+        recs = self.sentences()
+        for r in recs:
+            if r.get("text") == text and r.get("saved_at") == saved_at:
+                r.update(fields)
+                self._rewrite(self.sentence_path, recs)
+                self._changed()
+                return True
+        return False
 
     def delete_sentence(self, text: str, saved_at: str):
         """刪除一句（同一句只會記錄一次，saved_at 是保險），回傳 (位置, 紀錄) 給 restore_sentence()。"""

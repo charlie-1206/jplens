@@ -297,6 +297,8 @@ class SentenceCard(QFrame):
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
         v.addWidget(_label(one_line(rec.get("text", "")), "jp", wrap=True, select=True))
+        if rec.get("translation"):
+            v.addWidget(_label(rec["translation"], "summary", wrap=True, select=True))
         row = QHBoxLayout()
         row.setSpacing(6)
         words = rec.get("words") or []
@@ -308,9 +310,40 @@ class SentenceCard(QFrame):
             row.addWidget(more)
         row.addStretch(1)
         row.addWidget(_label(date_text(rec.get("saved_at", "")), "dim"))
+        # 講解（Gemini，ai.py）：第一次按才呼叫，結果存進句子紀錄，之後只是展開／收合
+        key = (rec.get("text", ""), rec.get("saved_at", ""))
+        has, busy, opened = bool(rec.get("explanation")), key in win.explaining, key in win.explain_open
+        label = "講解中…" if busy else ("收合講解" if has and opened else "講解" if not has else "展開講解")
+        btn = _button(label, slot=lambda: win.explain_sentence(rec),
+                      tip="用 Gemini 講解這句：翻譯、拆解詞與文法、語氣。模型在設定 → 翻譯與 AI 選。")
+        btn.setEnabled(not busy)
+        row.addWidget(btn)
         row.addWidget(_button("複製", slot=lambda: win.copy_sentence(rec)))
         row.addWidget(_button("刪除", "danger", lambda: win.delete_sentence(rec)))
         v.addLayout(row)
+        err = win.explain_errors.get(key)
+        if err:
+            v.addWidget(_label(err, "note", wrap=True))
+        if has and opened:
+            box = QFrame()
+            box.setObjectName("quote")
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(12, 10, 12, 10)
+            md = QLabel()
+            md.setTextFormat(Qt.MarkdownText)
+            md.setText(rec["explanation"])
+            md.setWordWrap(True)
+            md.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            bl.addWidget(md)
+            foot = QHBoxLayout()
+            from .ai import EXPLAIN_MODELS
+            model = rec.get("explain_model", "")
+            foot.addWidget(_label(EXPLAIN_MODELS.get(model, model).split("（")[0], "dim"))
+            foot.addStretch(1)
+            foot.addWidget(_button("重新講解", slot=lambda: win.explain_sentence(rec, again=True),
+                                   tip="用目前設定的模型再講解一次（會蓋掉這份講解）"))
+            bl.addLayout(foot)
+            v.addWidget(box)
 
 
 # ---------------------------------------------------------------- 篩選面板
@@ -552,6 +585,9 @@ class ManagerWindow(QWidget):
         self.resize(960, 700)
         self.setMinimumSize(560, 420)
         self.store, self.cfg = store, cfg
+        self.explaining: set = set()     # 正在講解的句子 (text, saved_at)
+        self.explain_open: set = set()   # 展開講解的句子
+        self.explain_errors: dict = {}   # 講解失敗的訊息
         self.view = "words"
         self.f = {"levels": set(), "pos": set(), "date": "all", "status": "all", "marked": "all"}
         self.expanded: str | None = None
@@ -929,6 +965,37 @@ class ManagerWindow(QWidget):
         if res:
             idx, old = res
             self.show_toast(f"已刪除「{rec.get('word', '')}」", lambda: self.store.restore(idx, old))
+
+    def explain_sentence(self, rec: dict, again: bool = False):
+        """句子頁的「講解」：已經有講解就展開／收合；沒有（或按「重新講解」）才呼叫 Gemini。"""
+        from . import ai
+        key = (rec.get("text", ""), rec.get("saved_at", ""))
+        if key in self.explaining:
+            return
+        self.explain_errors.pop(key, None)
+        if rec.get("explanation") and not again:
+            self.explain_open.symmetric_difference_update({key})
+            self.refresh()
+            return
+        self.explaining.add(key)
+        model = self.cfg.explain_model
+
+        def done(text, err):
+            from shiboken6 import isValid
+            if not isValid(self):  # 等講解的時候視窗關掉了：講解照樣存起來，只是不用重畫
+                if not err:
+                    self.store.update_sentence(key[0], key[1], explanation=text, explain_model=model)
+                return
+            self.explaining.discard(key)
+            if err:
+                self.explain_errors[key] = err
+            else:
+                self.explain_open.add(key)
+                if self.store.update_sentence(key[0], key[1], explanation=text, explain_model=model):
+                    return  # 存檔會觸發重新整理
+            self.refresh()
+        ai.run_async(lambda: ai.explain(key[0], model), done)
+        self.refresh()
 
     def delete_sentence(self, rec: dict):
         if not self._confirm_delete("這個句子"):

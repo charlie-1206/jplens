@@ -42,6 +42,20 @@ class Config:
     vocab_dir: str = ""        # 單字本資料夾；空字串＝專案的 vocab/
     export_scope: str = "all"  # 匯出單字時預設的範圍：all／marked
     export_learned: bool = True  # 匯出單字時已學會的也匯出
+    auto_translate: bool = False  # 舊設定（2026-10-17 前）：True 載入時轉成 translate_timing="auto"
+    # 整句翻譯的時機：manual＝按「翻譯」才翻；prefetch＝原文夠長就在背景先翻好，按了才顯示；auto＝翻好直接顯示
+    translate_timing: str = "manual"
+    prefetch_min_chars: int = 5  # 背景預先翻譯／自動翻譯：原文（去掉標點）至少幾個字才翻
+    # 翻譯來源：gemini（預設，ai.TRANSLATE_MODEL）或 openai（任何 OpenAI 相容的服務：網址＋模型；Key 存在認證管理員）
+    translate_provider: str = "gemini"
+    openai_base_url: str = ""
+    openai_model: str = ""
+    explain_model: str = "gemini-3.8-flash"  # 單字本句子頁「講解」用的模型（ai.EXPLAIN_MODELS）
+    # 無字幕模式（listen.py）：按住熱鍵＋這個字母開關；結果視窗的位置（邏輯像素，空的＝螢幕右下角）
+    listen_key: str = "L"
+    listen_partial: bool = True  # 邊講邊顯示（講話中每 0.8 秒重新辨識一次，CPU 約多用單核 10%）
+    listen_pos: list = None
+    listen_speed: float = 1.0  # 影片的播放速度（倍速）：辨識前放慢回原速（listen.SPEEDS）
     # 預留（還沒實作）：辨識的語言（要學的語言）、解釋的語言、介面語言
     src_lang: str = "ja"
     explain_lang: str = "zh-TW"
@@ -65,6 +79,24 @@ class Config:
             cfg.popup_width = "std"
         if cfg.export_scope not in ("all", "marked"):
             cfg.export_scope = "all"
+        if cfg.auto_translate and "translate_timing" not in data:
+            cfg.translate_timing = "auto"
+        if cfg.translate_timing not in ("manual", "prefetch", "auto"):
+            cfg.translate_timing = "manual"
+        if cfg.translate_provider not in ("gemini", "openai"):
+            cfg.translate_provider = "gemini"
+        try:
+            cfg.prefetch_min_chars = max(1, int(cfg.prefetch_min_chars))
+        except (TypeError, ValueError):
+            cfg.prefetch_min_chars = 5
+        if not (isinstance(cfg.listen_key, str) and len(cfg.listen_key) == 1 and "A" <= cfg.listen_key.upper() <= "Z"):
+            cfg.listen_key = "L"
+        cfg.listen_key = cfg.listen_key.upper()
+        if not (isinstance(cfg.listen_pos, list) and len(cfg.listen_pos) == 2
+                and all(isinstance(v, int) for v in cfg.listen_pos)):
+            cfg.listen_pos = None
+        if cfg.listen_speed not in (1.0, 1.25, 1.5, 1.75, 2.0):  # listen.SPEEDS（不在這裡 import，避免載入 numpy）
+            cfg.listen_speed = 1.0
         return cfg
 
     def save(self):
@@ -77,6 +109,10 @@ class Config:
     @property
     def hotkey_name(self) -> str:
         return HOTKEY_NAMES[self.hotkey]
+
+    @property
+    def listen_name(self) -> str:
+        return f"{self.hotkey_name}＋{self.listen_key}"
 
     @property
     def vocab_path(self) -> Path:

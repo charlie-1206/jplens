@@ -66,14 +66,18 @@ class SelectionHook:
     on_click(x, y)：沒按住熱鍵時的一般滑鼠點擊（用來關閉結果視窗）、on_escape()、
     on_hotkey()：熱鍵剛被按下（還沒點滑鼠；反白模式用來提早偵測版面）、
     on_tap(x, y)：按住熱鍵點一下、幾乎沒有移動（漫畫模式用來判斷雙擊；會先呼叫 on_cancel）、
-    on_mode(x, y)：按住熱鍵按一下右鍵（切換選取模式；右鍵的按下、放開都攔下來，底下的程式不會跳出右鍵選單）。"""
+    on_mode(x, y)：按住熱鍵按一下右鍵（切換選取模式；右鍵的按下、放開都攔下來，底下的程式不會跳出右鍵選單）、
+    on_listen()：按住熱鍵按 listen_vk 這個字母鍵（開關無字幕模式；這個鍵的按下、放開都攔下來，底下的程式收不到 Alt+L）。"""
 
     def __init__(self, hotkey_vks, on_start, on_move, on_end, on_cancel, on_click, on_escape, on_hotkey=None,
-                 on_tap=None, on_mode=None):
+                 on_tap=None, on_mode=None, on_listen=None, listen_vk=0x4C):
         self.hotkey_vks = list(hotkey_vks)
         self.on_start, self.on_move, self.on_end = on_start, on_move, on_end
         self.on_cancel, self.on_click, self.on_escape = on_cancel, on_click, on_escape
         self.on_hotkey, self.on_tap, self.on_mode = on_hotkey, on_tap, on_mode
+        self.on_listen, self.listen_vk = on_listen, listen_vk
+        self.select_enabled = True  # False：Alt＋拖曳、Alt＋右鍵都不攔（無字幕模式時），照常給底下的程式
+        self._listen_down = False  # 攔下了字母鍵的按下：放開也要攔、自動重複不再觸發
         self._rdown = False  # 攔下了右鍵的按下：對應的放開也要攔（放開時可能已經沒按 Alt）
         self._held: set[int] = set()  # 目前按著的熱鍵（通用鍵碼）
         self._last_down: dict[int, int] = {}  # 每個熱鍵最後一次按下事件的時間（毫秒）
@@ -91,13 +95,13 @@ class SelectionHook:
         ms = ctypes.cast(lparam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
         x, y = ms.pt.x, ms.pt.y
         try:
-            if wparam == WM_LBUTTONDOWN and all(_down(vk) for vk in self.hotkey_vks):
+            if wparam == WM_LBUTTONDOWN and self.select_enabled and all(_down(vk) for vk in self.hotkey_vks):
                 self._start = (x, y)
                 user32.keybd_event(VK_MASK, 0, 0, 0)
                 user32.keybd_event(VK_MASK, 0, KEYEVENTF_KEYUP, 0)
                 self.on_start(x, y)
                 return 1
-            if (wparam == WM_RBUTTONDOWN and self.on_mode and self._start is None
+            if (wparam == WM_RBUTTONDOWN and self.on_mode and self._start is None and self.select_enabled
                     and all(_down(vk) for vk in self.hotkey_vks)):
                 self._rdown = True
                 user32.keybd_event(VK_MASK, 0, 0, 0)  # 同左鍵：放開 Alt 時不要跳到選單列
@@ -147,6 +151,25 @@ class SelectionHook:
                             self.on_hotkey()  # 只在剛按下時通知一次（按住時的自動重複不算）
                     elif wparam in (WM_KEYUP, WM_SYSKEYUP):
                         self._held.discard(vk)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+        if code == 0 and self.on_listen:
+            kb = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+            if kb.vkCode == self.listen_vk and not kb.flags & LLKHF_INJECTED:
+                try:
+                    if wparam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        if self._listen_down:  # 按住不放的自動重複
+                            return 1
+                        if all(_down(vk) for vk in self.hotkey_vks):
+                            self._listen_down = True
+                            user32.keybd_event(VK_MASK, 0, 0, 0)  # 放開 Alt 時不要跳到選單列
+                            user32.keybd_event(VK_MASK, 0, KEYEVENTF_KEYUP, 0)
+                            self.on_listen()
+                            return 1
+                    elif wparam in (WM_KEYUP, WM_SYSKEYUP) and self._listen_down:
+                        self._listen_down = False
+                        return 1
                 except Exception:
                     import traceback
                     traceback.print_exc()
