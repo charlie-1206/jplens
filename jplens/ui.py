@@ -956,6 +956,7 @@ class ResultPopup(QWidget):
             fg = u.GetForegroundWindow()
             if fg and fg != hwnd:
                 self._prev_fg = fg
+            self._allow_focus(True)  # 要在設成前景之前
             u.SetForegroundWindow(wt.HWND(hwnd))
             (self.text if obj is self.text.viewport() else obj).setFocus(Qt.MouseFocusReason)
         elif e.type() == QEvent.KeyPress and e.matches(QKeySequence.Copy):
@@ -968,6 +969,25 @@ class ResultPopup(QWidget):
         prev, self._prev_fg = getattr(self, "_prev_fg", None), None
         if prev and u.GetForegroundWindow() == int(self.winId()) and u.IsWindow(prev):
             u.SetForegroundWindow(wt.HWND(prev))
+        self._allow_focus(False)
+
+    def _allow_focus(self, on: bool):
+        """點進原文、反白文字時暫時讓視窗可以接受焦點（拿掉 WindowDoesNotAcceptFocus），還鍵盤時改回來。
+        沒拿掉的話 Qt 不把這個視窗當成焦點視窗、不告訴輸入法游標在哪，候選字窗會跑到螢幕左上角
+        （使用者 10-17 回報；實測 focusObject 是 None、游標框 (0, 0)）。只改 QWindow 的旗標，視窗不會重建、不會閃。"""
+        wh = self.windowHandle()
+        if wh is not None and bool(wh.flags() & Qt.WindowDoesNotAcceptFocus) == on:
+            wh.setFlag(Qt.WindowDoesNotAcceptFocus, not on)
+
+    def changeEvent(self, e):
+        # 使用者點去別的程式（原文改到一半也一樣）：改回不接受焦點，之後按這個視窗的按鈕才不會又把鍵盤搶過來
+        if e.type() == QEvent.ActivationChange and not self.isActiveWindow():
+            self._allow_focus(False)
+        super().changeEvent(e)
+
+    def hideEvent(self, e):
+        self._allow_focus(False)
+        super().hideEvent(e)
 
     def leaveEvent(self, e):
         # 原文改到一半（還沒重查）時不還，免得打字打到一半鍵盤跑掉
