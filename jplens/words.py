@@ -71,6 +71,8 @@ def _jlpt_lists() -> tuple[dict, dict]:
                     words, readings = analysis._forms(row["expression"], affix), analysis._forms(row["reading"], affix)
                     for i, w in enumerate(words):
                         rd = analysis.to_hira(readings[min(i, len(readings) - 1)]) if readings else w
+                        if rd.endswith("する") and not w.endswith("る"):
+                            rd = rd[:-2]  # N4 的サ變名詞讀音欄寫成「にゅうがくする」，寫法只有「入学」（擦る／為る 的 する 是真的讀音）
                         entry = analysis.JlptEntry(w, rd, row["meaning"].strip(), level)
                         if all(e.reading != rd for e in table.get(w, [])):
                             table.setdefault(w, []).append(entry)
@@ -93,6 +95,22 @@ def _base_form(t: analysis.Token) -> str:
     return t.lemma or t.surface
 
 
+_E_ROW = dict(zip("うくぐすつぬぶむる", "えけげせてねべめれ"))
+
+
+def _norm(t: analysis.Token, dictionary: Dictionary) -> str:
+    """Sudachi 的標準寫法，只在它是同一個詞時才用：JMdict 同一個條目的寫法（ひっぱる → 引っ張る、だいぶ → 大分），
+    辭書形是標準寫法的可能動詞（言える → 言う、書ける → 書く）、文語或「〜す」的舊形（若し → 若い、愛す → 愛する）。
+    標準寫法也會把口語變體換成另一個詞（乗っかる → 乗る、ぶっ壊す → 打ち壊す，字典裡是不同條目）：這時改用辭書形。
+    不用 Sudachi 的讀音判斷：單獨念漢字常念錯（言う → ゆう、大分 → おおいた）。"""
+    n, lemma = t.norm, t.lemma
+    if not n or n == lemma or not lemma or t.pos[4].startswith("文語") or lemma + "る" == n:
+        return n
+    if n[-1:] in _E_ROW and lemma == n[:-1] + _E_ROW[n[-1]] + "る":
+        return n
+    return n if dictionary.same_word(lemma, n) else lemma
+
+
 def _ref_reading(t: analysis.Token) -> str:
     """用來比對的讀音：沒有活用的詞用原文讀音（風＝ふう／かぜ 要看原文），
     有活用的詞用辭書形的讀音（「来た」的 き 會誤配到「来る（きたる）」）。"""
@@ -106,10 +124,12 @@ def _entry_reading(e) -> str:
     return e.reading if analysis._KANA_ONLY.match(e.reading) else analysis.to_hira(e.word)
 
 
-def lookup_jlpt(t: analysis.Token):
-    """依 辭書形 → 標準寫法 找候選，取讀音開頭和原文最相符的；完全對不上（第一個假名就不同）視為別的詞。"""
+def lookup_jlpt(t: analysis.Token, norm: str, dictionary: Dictionary | None = None):
+    """依 辭書形 → 標準寫法 找候選，取讀音開頭和原文最相符的；完全對不上（第一個假名就不同）視為別的詞。
+    有 dictionary 時，對不上的讀音如果和表上的是 JMdict 同一條目的兩個念法，也算同一個詞
+    （Sudachi 單獨念「言う」給 ゆう，表上是 いう：取表上的讀音和級數）。"""
     for table in _jlpt_lists():
-        cands = [e for w in dict.fromkeys((_base_form(t), t.lemma, t.norm)) for e in table.get(w, [])]
+        cands = [e for w in dict.fromkeys((_base_form(t), t.lemma, norm)) for e in table.get(w, [])]
         if cands:
             break
     else:
@@ -127,7 +147,13 @@ def lookup_jlpt(t: analysis.Token):
     def score(e):
         return max(_common_prefix(_entry_reading(e), r) for r in refs)
     best = max(cands, key=score)  # 同分取前面的（較簡單的級別）
-    return best if score(best) > 0 else None
+    if score(best) > 0:
+        return best
+    if dictionary is not None:
+        for e in cands:
+            if any(dictionary.same_entry(e.word, _entry_reading(e), r) for r in refs):
+                return e
+    return None
 
 
 # ---------------------------------------------------------------- 慣用說法（多個詞合起來才有意思）
@@ -140,6 +166,10 @@ _EXPR_START = {"名詞", "動詞", "形容詞", "副詞", "形状詞", "連体�
 _EXPR_END = {"名詞", "動詞", "形容詞", "形状詞", "副詞"}
 _NEG = {"ない", "ぬ", "ず", "ん"}
 _INFLECTING = {"動詞", "形容詞", "助動詞"}
+# 動詞未然形＋文語助動詞合成一個詞（知ら＋しめる → 知らしめる、思わ＋ず → 思わず）：Sudachi 會拆開，助動詞結尾也要試
+_EXPR_END_AUX = {"しめる", "ず", "ぬ", "まい", "べし"}
+# 慣用語中間的が／を被換成提示、強調的助詞（気もつかない、腹は立つ）：換回が／を再查
+_TOPIC = {"は", "も", "こそ", "さえ", "でも", "なんか", "なんて", "すら"}
 # 以這些形式名詞開頭的是文法句型（ことにする、はずがない、わけじゃない），字典常配到同音的別的詞（異にする），不列
 _FORMAL_NOUNS = {"こと", "事", "もの", "物", "はず", "筈", "わけ", "訳", "ところ", "所", "よう", "様", "つもり", "積もり"}
 # 「そう言われると」「ああ言っている」的 言う 是真的在說話，不是「そういう／ああいう（那樣的）」
@@ -175,12 +205,19 @@ def _expr_forms(tokens: list[analysis.Token], i: int, j: int) -> list[str]:
         return []
     negated = any(t.lemma in _NEG or t.surface in _NEG for t in tokens[j:j + 3] if t.pos1 == "助動詞")
     head = "".join(t.surface for t in span[:-1])
+    heads = [head]
+    if len(span) >= 3 and span[0].pos1 == "名詞" and span[1].pos1 == "助詞":
+        rest = "".join(t.surface for t in span[2:-1])
+        if span[1].surface in _TOPIC:  # 気もつかない → 気がつく、腹は立つ → 腹が立つ
+            heads += [span[0].surface + p + rest for p in ("が", "を")]  # 換回に會配錯（糸は紡がれ → 糸に紡ぐ）
+        elif span[1].surface == "に" and len(span) >= 4 and span[2].surface in ("は", "も"):  # 手には負えない → 手に負えない
+            heads.append(span[0].surface + "に" + "".join(t.surface for t in span[3:-1]))
     tails = [last.lemma]
     if last.pos1 not in _INFLECTING:
         tails.append(last.surface)
     if negated and last.pos1 == "動詞":
         tails.insert(0, _negative(last))
-    forms = [head + tail for tail in tails if tail]
+    forms = [h + tail for h in heads for tail in tails if tail]
     if len(span) == 2 and span[0].pos1 == "名詞" and last.pos1 == "動詞":
         forms += [head + p + last.lemma for p in ("を", "が")]  # 口語常省略を、が；に很少省略（ともすると ≠ ともにする）
     return list(dict.fromkeys(forms))
@@ -196,7 +233,10 @@ def find_expressions(tokens: list[analysis.Token], dictionary: Dictionary) -> li
         for j in range(i + 2, min(len(tokens), i + MAX_EXPR) + 1):
             if tokens[j - 1].is_punct():
                 break
-            if tokens[j - 1].pos1 in _EXPR_END:
+            last = tokens[j - 1]
+            if last.pos1 in _EXPR_END or (last.pos1 == "助動詞" and last.lemma in _EXPR_END_AUX
+                                          and tokens[j - 2].pos1 == "動詞"
+                                          and not (j - i == 2 and t.lemma in ("する", "す", "為る"))):  # すべし、せず 是文法，不是詞
                 cands.append((i, j, _expr_forms(tokens, i, j)))
     found = dictionary.existing_phrases(f for _, _, forms in cands for f in forms)
     out, covered = [], -1
@@ -336,25 +376,37 @@ _FALLBACK_POS = {"名詞", "代名詞", "動詞", "形容詞", "形状詞", "副
 
 def _word_info(t: analysis.Token, text: str, pos_in_text: int, dictionary: Dictionary):
     """一個詞的單字資訊；回傳 (去重用的鍵, WordInfo)。"""
-    entry = lookup_jlpt(t)
+    norm = _norm(t, dictionary)
+    entry = lookup_jlpt(t, norm, dictionary)
     proper = t.pos[1] == "固有名詞"
     word = entry.word if entry else _base_form(t)
-    if entry and entry.word not in (t.lemma, t.norm, _base_form(t)):
+    if entry and entry.word not in (t.lemma, norm, _base_form(t)):
         word = _base_form(t)  # 透過假名配到表上的「できる」：照原文寫「出来る」（查字典也用漢字，免得配到別的詞）
-    key = entry.word if entry else (t.norm or word)
+    key = entry.word if entry else (norm or word)
     if analysis._KATAKANA_ONLY.match(word):
         reading = word  # 外來語：讀音就是本身
     elif entry:
         reading = _entry_reading(entry)
     else:
         reading = _ref_reading(t)
-    m = dictionary.lookup([word, key, t.lemma, t.norm], reading, token_cats(t.pos))
+    m = dictionary.lookup([word, key, t.lemma, norm], reading, token_cats(t.pos))
     return (key, reading), WordInfo(
         word=word, reading=reading, pos=analysis.pos_label(t),
         level=None if proper or not entry else entry.level, proper=proper,
         sentence=_sentence_at(text, pos_in_text), zh=m.zh, en=m.en, rare_zh=m.rare_zh, rare_en=m.rare_en,
         jlpt_en=entry.meaning if entry else "",
         also=[] if proper else dictionary.other_readings(word, reading))
+
+
+def _head_words(head: str, surface: str, text: str, pos_in_text: int, dictionary: Dictionary) -> list:
+    """複合詞的前半（練り直す 的「練り」）是一個動詞時，列出那個動詞（練る）。
+    後面接「ます」再斷詞：單獨的「塗り」「読み」Sudachi 會斷成名詞。"""
+    if not surface.startswith(head) and surface[len(head) - 1:len(head)] == head[-1]:
+        head = surface[:len(head)]  # 前半取自標準寫法（遣り直す）時改用原文的寫法（やり）
+    toks = analysis.tokenize(head + "ます")
+    if len(toks) != 2 or toks[0].surface != head or toks[0].pos1 != "動詞" or not analysis._candidate(toks, 0, set()):
+        return []
+    return [_word_info(toks[0], text, pos_in_text, dictionary)]
 
 
 def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]] | None = None) -> list[WordInfo]:
@@ -374,9 +426,12 @@ def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]
             if rule.id not in seen_rules:
                 seen_rules.add(rule.id)
                 points.append(_grammar_info(rule, _sentence_at(text, starts[start])))
-        in_grammar = set()
+        in_grammar, heads = set(), {}
         for rule, start, end in hits:
-            if end - start > 1 or tokens[start].pos1 in ("名詞", "動詞", "形容詞"):
+            head = grammar.rule_compound_head(rule, tokens[start]) if end - start == 1 else None
+            if head:
+                heads[start] = head  # 複合詞（練り直す、読み方）本身照樣列，另外列前半的動詞（練る）
+            elif end - start > 1 or tokens[start].pos1 in ("名詞", "動詞", "形容詞"):
                 in_grammar.update(range(start, end))  # 已屬於文法句型的詞（にとって 的「取る」）不列
         exprs = {i: (j, form) for i, j, form in find_expressions(tokens, dictionary)}
         # 組成慣用說法的詞單獨列出時意思常會誤導（ため息をつく 的 つく ≠ 到達、気になる 的 気），不另外列；
@@ -411,10 +466,16 @@ def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]
                     skipped.append((t, text, pos_in_text))
                 continue
             key, info = _word_info(t, text, pos_in_text, dictionary)
-            if key in seen:  # 同寫法不同讀音（辛い：からい／つらい）是不同的字，都列
-                continue
-            seen.add(key)
-            out.append(info)
+            if i in heads and not (info.zh or info.en or info.jlpt_en):
+                pass  # 字典沒收的複合詞（塗り直す）不列，只列前半的動詞
+            elif key not in seen:  # 同寫法不同讀音（辛い：からい／つらい）是不同的字，都列
+                seen.add(key)
+                out.append(info)
+            if i in heads:
+                for key, info in _head_words(heads[i], t.surface, text, pos_in_text, dictionary):
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(info)
     if not out:
         for t, text, pos_in_text in skipped:
             key, info = _word_info(t, text, pos_in_text, dictionary)

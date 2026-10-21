@@ -677,11 +677,16 @@ class SettingsWindow(QWidget):
         if self.app is not None and not self.app.worker.ready:
             return "模型載入中…"
         from . import gpu
-        return "CUDA（NVIDIA 顯示卡）" if gpu.cuda_ready() else "CPU（沒有找到可用的 CUDA）"
+        b = gpu.backend()
+        return gpu.name() if b != "cpu" else "CPU（沒有找到可用的 CUDA／DirectML，或顯示卡比 CPU 慢）"
 
     def _tab_about(self):
         g = self._section("螢幕查字")
-        g.add("版本", "", _label("開發版（還沒正式發布）", "sub"))
+        import onnxruntime as ort
+
+        from . import __version__
+        flavor = "DirectML 版" if "DmlExecutionProvider" in ort.get_available_providers() else "CUDA 版"
+        g.add("版本", "", _label(f"v{__version__}（{flavor}）", "sub"))
         g.add("程式碼授權", "", _label("Apache-2.0", "sub"))
         g = self._section("資料與模型來源", "CC BY-SA 的資料要求在 App 裡標示來源")
         lst = QFrame()

@@ -8,6 +8,8 @@
     か も しれる?                 結尾的 ? 表示這個元素可有可無
     ば * ほど                     * 比對任何一個詞（標點除外）
     ~過ぎる:動詞                  ~ 開頭：辭書形或標準寫法以此結尾的複合詞（食べ過ぎる）
+    動詞~直す:動詞                ~ 前面寫「動詞」：去掉字尾後剩下的要是動詞連用形（練り直す 的 練り），
+                                  「~方」才不會比對到 夕方、両方、粗方（あらかた）這類一般名詞
     =ず:助動詞                    = 開頭：只比對表層形（「ません」的「ん」辭書形也是ず）
     よう に !思う|見える          ! 開頭：下一個詞「不是」這些（不佔位置）
     じゃ:助動詞 $                 $：句尾或標點之前（不佔位置）
@@ -61,6 +63,7 @@ class _Alt:
     any: bool = False
     suffix: str = ""
     surface_only: bool = False
+    head_verb: bool = False  # 字尾前面要是動詞連用形（動詞~直す）
 
     @property
     def has_text(self) -> bool:
@@ -70,7 +73,7 @@ class _Alt:
         if self.any:
             return not t.is_punct()
         if self.suffix:
-            if not any(w.endswith(self.suffix) and w != self.suffix for w in (t.lemma, t.norm)):
+            if compound_head(self, t) is None:
                 return False
         elif self.words:
             cands = {t.surface} if self.surface_only else {t.surface, t.lemma, t.norm}
@@ -81,6 +84,32 @@ class _Alt:
         if self.form and not t.cform.startswith(self.form):
             return False
         return True
+
+
+# 動詞連用形的最後一個假名（い段、え段）：読み、使い、考え、食べ
+_REN_KANA = set("いきぎしじちぢにひびぴみりえけげせぜてでねへべぺめれ")
+
+
+@lru_cache(maxsize=4096)
+def _is_verb_stem(head: str) -> bool:
+    """head 是不是動詞連用形（複合詞去掉字尾剩下的部分）：結尾是い段／え段的假名（読み、考え），
+    或整段被 Sudachi 斷成一個動詞連用形（見方 的 見、練り）。夕、両、粗（形容詞語幹）都不是。"""
+    if not head:
+        return False
+    if head[-1] in _REN_KANA:
+        return True
+    toks = tokenize(head)
+    return len(toks) == 1 and toks[0].pos1 == "動詞" and toks[0].cform.startswith("連用形")
+
+
+def compound_head(alt: "_Alt", t: Token) -> str | None:
+    """字尾元素（~直す）比對得到這個詞時，回傳去掉字尾剩下的部分（練り直す → 練り）；比對不到回傳 None。"""
+    for w in (t.lemma, t.norm):
+        if w.endswith(alt.suffix) and w != alt.suffix:
+            head = w[:-len(alt.suffix)]
+            if not alt.head_verb or _is_verb_stem(head):
+                return head
+    return None
 
 
 @dataclass(frozen=True)
@@ -108,6 +137,8 @@ def _parse_alt(s: str) -> _Alt:
         s, pos = s.split(":", 1)
     if s.startswith("~"):
         return _Alt(pos=pos, form=form, suffix=s[1:])
+    if s.startswith("動詞~") and len(s) > 3:
+        return _Alt(pos=pos, form=form, suffix=s[3:], head_verb=True)
     if s.startswith("="):
         return _Alt(frozenset([s[1:]]), pos, form, surface_only=True)
     return _Alt(frozenset([s]) if s else frozenset(), pos, form)
@@ -133,7 +164,8 @@ def compile_seq(seq: str) -> tuple:
             if alt.pos or alt.form:
                 pos, form = alt.pos, alt.form
             elif not alt.any:
-                alt = _Alt(alt.words, pos, form, suffix=alt.suffix, surface_only=alt.surface_only)
+                alt = _Alt(alt.words, pos, form, suffix=alt.suffix, surface_only=alt.surface_only,
+                           head_verb=alt.head_verb)
             alts.append(alt)
         elems.append(_Elem(tuple(reversed(alts)), optional, kind))
     return tuple(elems)
@@ -172,6 +204,16 @@ def find_spans(seq: str, tokens: list[Token]) -> list[tuple[int, int, int]]:
         end, core = res
         spans.append((min(core), max(core) + 1, len(core)) if core else (start, end, 0))
     return spans
+
+
+def rule_compound_head(rule: Rule, t: Token) -> str | None:
+    """規則是靠字尾元素（~直す）比對到 t 這一個詞時（t 是複合詞：練り直す、読み方），回傳前半（練り、読み）；否則 None。"""
+    for seq in rule.seqs:
+        for el in compile_seq(seq):
+            for alt in el.alts:
+                if alt.suffix and alt.match(t):
+                    return compound_head(alt, t)
+    return None
 
 
 def match_line(tokens: list[Token], rules=None) -> list[Rule]:

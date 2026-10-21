@@ -25,6 +25,9 @@ datas = [
     (str(REAZON / "tokens.txt"), "data/models/asr/" + REAZON.name),
     (str(REAZON / "README.md"), "data/models/asr/" + REAZON.name),
     *[(str(f), "data/models/asr/" + REAZON.name) for f in REAZON.glob("*.int8.onnx")],
+    # 單字測驗（quiz.py）：判斷選項有沒有同義的語意模型，只帶 int8 版（24 MB）
+    (str(ROOT / "data" / "models" / "bge-small-zh" / "model_quantized.onnx"), "data/models/bge-small-zh"),
+    (str(ROOT / "data" / "models" / "bge-small-zh" / "tokenizer.json"), "data/models/bge-small-zh"),
     (str(ROOT / "NOTICE.md"), "."),
     (str(ROOT / "LICENSE"), "."),
 ]
@@ -45,7 +48,8 @@ a = Analysis(
     # google.genai、keyring 在 ai.py 裡用到時才 import，PyInstaller 看不到，要明列
     hiddenimports=collect_submodules("jplens") + collect_submodules("dxcam") + ["comtypes.stream"]
     + collect_submodules("google.genai") + collect_submodules("keyring.backends")
-    + ["sherpa_onnx", "pyaudiowpatch"],  # 無字幕模式（listen.py 開啟時才 import）
+    + ["sherpa_onnx", "pyaudiowpatch"]  # 無字幕模式（listen.py 開啟時才 import）
+    + ["tokenizers"],  # 單字測驗的語意模型（quiz.py 用到時才 import）
     excludes=excludes,
     noarchive=False,
 )

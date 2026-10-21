@@ -6,12 +6,15 @@
 3. refine：切點移到最近的字距空隙，避免切到半個字（反白顯示與辨識用同一組切點）
 """
 
+import logging
 import os
 from dataclasses import dataclass
 
 import numpy as np
 
 from .recognize import Box, _merge_boxes
+
+log = logging.getLogger("jplens")
 
 SQUARISH = 1.5   # 長寬比小於這個值的框看不出方向，參考鄰近的行
 RUBY_RATIO = 0.6  # 比旁邊平行的行細這麼多、又緊貼著它 → 振假名
@@ -524,8 +527,23 @@ def box_select(lines: list[TLine], box: tuple[int, int, int, int]) -> list[Segme
 _profile_cache: tuple = (None, {})
 
 
+def _local_background(g: np.ndarray, thick: int) -> np.ndarray:
+    """g：行的灰階（列＝橫越行的方向、欄＝沿著行）。每個位置的背景＝行框上下（左右）邊緣幾列的中位數，
+    再沿著行取約一個字寬的移動中位數（字的筆畫碰到行框邊時不會被當成背景）。"""
+    k = max(2, int(round(0.12 * g.shape[0])))
+    edge = np.median(np.concatenate([g[:k], g[-k:]]), axis=0)
+    w = max(3, int(thick) | 1)
+    if len(edge) <= w:
+        return np.full(len(edge), np.median(edge), np.float32)
+    pad = np.pad(edge, w // 2, mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(pad, w), axis=1).astype(np.float32)
+
+
 def _ink_profile(img: np.ndarray, ln: TLine) -> np.ndarray:
-    """沿著行的「墨水量」：每個位置和背景（中位數）差多少。"""
+    """沿著行的「墨水量」：每個位置和那裡的背景差多少。
+    背景用局部的（_local_background），不用整行的中位數：字幕這種長行背後的畫面明暗不同時
+    （左邊亮的桌面、右邊暗的窗框），整行中位數離字距空隙的背景很遠，空隙反而被算成墨水最多，
+    框選的切點就跑進下一個字裡（框「実り多き」讀成「実り多きり」，2026-10-18 使用者回報）。"""
     global _profile_cache
     owner, memo = _profile_cache
     if owner is not img:
@@ -537,8 +555,9 @@ def _ink_profile(img: np.ndarray, ln: TLine) -> np.ndarray:
     if prof is None:
         crop = img[b.y0:b.y1, b.x0:b.x1]
         g = crop.mean(axis=2) if crop.ndim == 3 else crop.astype(np.float32)
-        ink = np.abs(g - np.median(g))
-        prof = ink.sum(axis=1) if ln.vertical else ink.sum(axis=0)
+        if ln.vertical:
+            g = g.T
+        prof = np.abs(g - _local_background(g, ln.thickness)).sum(axis=0)
         if len(memo) > 500:
             memo.clear()
         memo[key] = prof
@@ -590,10 +609,10 @@ def plan_drag(img: np.ndarray, lines: list[TLine], start, end) -> tuple[list[TLi
     return lines, refine(img, lines, select(lines, start, end))
 
 
-def plan_box(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int], detect=None):
+def plan_box(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int], detect=None, read=None):
     """框選要怎麼讀：直排小說先用墨水投影找欄（inkcols.plan_ink），找不到才照偵測的版面（_plan_box_det）。
     detect：偵測函式（Recognizer.detect_screen）。框住的是橫排小字時，框附近放大重新偵測（zoom_lines），
-    依行讀的結果改成 ("line", (放大偵測的行, 片段))。"""
+    依行讀的結果改成 ("line", (放大偵測的行, 片段))。read：Recognizer.read_segment_parts（框比行長時確認延長的部分，_extend_lines）。"""
     from . import inkcols
     if inkcols.ENABLED:
         found = inkcols.plan_ink(img, lines, box)
@@ -602,9 +621,9 @@ def plan_box(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int]
     if detect is not None and small_text(lines, box):
         zl = zoom_lines(detect, img, box)
         if zl:
-            how, arg = _plan_box_det(img, zl, box)
+            how, arg = _plan_box_det(img, zl, box, read)
             return ("line", (zl, arg)) if how == "lines" else (how, arg)
-    return _plan_box_det(img, lines, box)
+    return _plan_box_det(img, lines, box, read)
 
 
 # ---------------------------------------------------------------- 小字：放大重新偵測
@@ -660,7 +679,113 @@ def zoom_strip(detect, img: np.ndarray, lines: list[TLine], y: int, exclude=None
     return build_layout(old + boxes, img, exclude), (top, bot)
 
 
-def _plan_box_det(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int]):
+EXTEND = 1.0  # 框比偵測到的行的頭尾多出超過這麼多字寬（行的粗細）時，把行延長到框邊一起讀
+
+
+def _ink_reach(img: np.ndarray, ln: TLine, new_lo: int, new_hi: int) -> tuple[int, int]:
+    """行要往外延長到 [new_lo, new_hi]（沿著行的座標）時，實際延長到哪裡：從行的頭（尾）往外走，
+    只延長到最後一塊「和這行的字差不多濃」的墨水，中間空白超過一個字寬就停。
+    manga-ocr 看到大片空白時常常憑空讀出字（「それで、」「しかし、」），所以不能直接延長到框邊。"""
+    b, t = ln.box, ln.thickness
+    lo, hi = (b.y0, b.y1) if ln.vertical else (b.x0, b.x1)
+    big = Box(b.x0, new_lo, b.x1, new_hi) if ln.vertical else Box(new_lo, b.y0, new_hi, b.y1)
+    prof = _ink_profile(img, TLine(big, ln.vertical))
+    own = prof[lo - new_lo:hi - new_lo]
+    if len(own) < 2:
+        return lo, hi
+    thr = 0.3 * float(np.percentile(own, 75))
+    margin, gap_max = int(0.15 * t), int(1.0 * t)
+
+    def walk(positions):
+        last, gap = None, 0
+        for p in positions:
+            if prof[p - new_lo] > thr:
+                last, gap = p, 0
+            else:
+                gap += 1
+                if gap > gap_max:
+                    break
+        return last
+    first = walk(range(lo - 1, new_lo - 1, -1)) if new_lo < lo else None
+    end = walk(range(hi, new_hi)) if new_hi > hi else None
+    return (max(new_lo, first - margin) if first is not None else lo,
+            min(new_hi, end + 1 + margin) if end is not None else hi)
+
+
+def _start_ok(img: np.ndarray, ln: TLine, new_lo: int, read) -> bool:
+    """往行首延長的那一段是不是真的字：單獨讀要讀出文字（不只標點、數字），
+    而且多帶原本的行兩個字再讀一次，開頭要和單獨讀的一樣。頭髮、衣服紋路單獨讀常只得到「…」「1」，
+    或兩次讀的不一樣（「いく」／「道を」）；真的字（うん、）兩次都讀得出來。"""
+    import unicodedata
+    b, t = ln.box, ln.thickness
+    lo, hi = (b.y0, b.y1) if ln.vertical else (b.x0, b.x1)
+    probe_hi = min(hi, lo + int(2 * t))
+    if ln.vertical:
+        piece, probe = Box(b.x0, new_lo, b.x1, lo), Box(b.x0, new_lo, b.x1, probe_hi)
+    else:
+        piece, probe = Box(new_lo, b.y0, lo, b.y1), Box(new_lo, b.y0, probe_hi, b.y1)
+    tl = [TLine(piece, ln.vertical), TLine(probe, ln.vertical)]
+    p, q = read(img, tl, [Segment(0, 0.0, float(tl[0].length)), Segment(1, 0.0, float(tl[1].length))])
+    ok = any(unicodedata.category(c)[0] == "L" for c in p) and q.startswith(p)
+    log.info("框選延長行首 %d 像素：單獨讀「%s」、多帶兩字讀「%s」→ %s", lo - new_lo, p, q, "採用" if ok else "不採用")
+    return ok
+
+
+def _extend_lines(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int], read=None) -> list[TLine] | None:
+    """框選時，框在某一行的頭尾外面還多出一段（> EXTEND 字寬），而那一段沒有別的偵測到的行：
+    把那一行延長到框邊（只延長框裡的部分）。偵測模型會漏掉疊在相近顏色背景上的字
+    （字幕「うん、会場じゃできない。」白字疊在白頭髮上，「うん、」整段沒偵測到；manga-ocr 讀得出來，
+    2026-10-18 使用者回報）。往行尾延長只看墨水（補回偵測框切掉的句尾標點「。」「、」）；
+    往行首延長時 manga-ocr 常把頭髮、衣服紋路讀成「…」「そう」「あ、」，所以還要過 _start_ok
+    （read：Recognizer.read_segment_parts；沒有就不往行首延長）。沒有要延長的行回傳 None。"""
+    x0, y0, x1, y1 = box
+    out, changed = list(lines), False
+    for k, ln in enumerate(lines):
+        b, t = ln.box, ln.thickness
+        ix0, iy0, ix1, iy1 = max(b.x0, x0), max(b.y0, y0), min(b.x1, x1), min(b.y1, y1)
+        if ix1 <= ix0 or iy1 <= iy0 or ((ix1 - ix0) if ln.vertical else (iy1 - iy0)) < 0.6 * t:
+            continue  # 框沒有確實框住這一行（只擦到邊的不延長）
+        lo, hi = (b.y0, b.y1) if ln.vertical else (b.x0, b.x1)
+        blo, bhi = (y0, y1) if ln.vertical else (x0, x1)
+        new_lo = blo if lo - blo > EXTEND * t else lo
+        new_hi = bhi if bhi - hi > EXTEND * t else hi
+        if (new_lo, new_hi) == (lo, hi):
+            continue
+
+        def free(a, c):  # 延長的那一段 [a, c) 和別的行不重疊
+            r = Box(b.x0, a, b.x1, c) if ln.vertical else Box(a, b.y0, c, b.y1)
+            return not any(j != k and o.box.x0 < r.x1 and o.box.x1 > r.x0 and o.box.y0 < r.y1 and o.box.y1 > r.y0
+                           for j, o in enumerate(lines))
+        new_lo = new_lo if new_lo == lo or free(new_lo, lo) else lo
+        new_hi = new_hi if new_hi == hi or free(hi, new_hi) else hi
+        if (new_lo, new_hi) == (lo, hi):
+            continue
+        new_lo, new_hi = _ink_reach(img, ln, new_lo, new_hi)
+        if new_lo < lo and (read is None or not _start_ok(img, ln, new_lo, read)):
+            new_lo = lo
+        if (new_lo, new_hi) == (lo, hi):
+            continue
+        nb = Box(b.x0, new_lo, b.x1, new_hi) if ln.vertical else Box(new_lo, b.y0, new_hi, b.y1)
+        log.info("框選延長行（偵測漏掉的行頭行尾）：行 %s → %s（行首 +%d、行尾 +%d 像素）",
+                 b.to_list(), nb.to_list(), lo - new_lo, new_hi - hi)
+        out[k] = TLine(nb, ln.vertical, ln.block, ln.ruby)
+        changed = True
+    return out if changed else None
+
+
+def _plan_box_det(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int], read=None):
+    """同 _plan_box_lines，框比行長出一段時先把行延長（_extend_lines）；延長後依行讀的結果改成
+    ("line", (延長後的行, 片段))（只在這一次框選用，不改整個螢幕的版面）。"""
+    ext = _extend_lines(img, lines, box, read) if EXTEND else None
+    if ext is None:
+        return _plan_box_lines(img, lines, box)
+    how, arg = _plan_box_lines(img, ext, box)
+    if how == "lines":
+        return "line", (ext, arg)
+    return how, arg
+
+
+def _plan_box_lines(img: np.ndarray, lines: list[TLine], box: tuple[int, int, int, int]):
     """框選要怎麼讀（依偵測框與版面規則）。回傳 ("whole", (裁切範圍, 要塗成背景的範圍))、("lines", 片段)、
     ("line", ([框當成的一行], [片段])) 或 ("block", None)。
     - 框住的是一個對話框大小的範圍（6 行以內、每行約 12 字以內、框不超過約 6×13 個字），而且框到兩行以上

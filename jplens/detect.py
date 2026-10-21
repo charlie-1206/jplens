@@ -33,6 +33,8 @@ class FastDet:
         so = ort.SessionOptions()
         so.log_severity_level = 3
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        from . import gpu
+        gpu.session_options(so)
         self.path = path
         self.sess = ort.InferenceSession(str(path), so, providers=providers)
         self.out_name = self.sess.get_outputs()[0].name

@@ -137,6 +137,9 @@ class MangaOcrOnnx:
         so = ort.SessionOptions()
         so.log_severity_level = 3
         so.add_session_config_entry("session.intra_op.allow_spinning", "0")  # 不和其他 session 搶 CPU
+        if any((p[0] if isinstance(p, tuple) else p) == "DmlExecutionProvider" for p in providers):
+            so.enable_mem_pattern = False  # DirectML 的要求（gpu.session_options）
+            so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         self.enc = ort.InferenceSession(str(model_dir / "encoder.onnx"), so, providers=providers)
         self.dec = ort.InferenceSession(str(model_dir / "decoder.onnx"), so, providers=providers)
         p = self.dec.get_providers()[0]
@@ -162,7 +165,8 @@ class MangaOcrOnnx:
         cross = dict(zip(cross_names, io.get_outputs()))
         n = len(grays) * self.num_beams
         empty = np.zeros((n, 12, 0, 64), dt)
-        past = {f"{kv}{i}": ort.OrtValue.ortvalue_from_numpy(empty, dev, 0) for i in range(LAYERS) for kv in "kv"}
+        # 一開始的 past 長度是 0、沒有資料，放在 CPU 就好（DirectML 上建長度 0 的張量會閃退）
+        past = {f"{kv}{i}": ort.OrtValue.ortvalue_from_numpy(empty) for i in range(LAYERS) for kv in "kv"}
 
         def step(tokens, src, pos):
             nonlocal past

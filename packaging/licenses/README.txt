@@ -26,6 +26,19 @@ ONNX Runtime（_internal\onnxruntime\）
 -------------------------------------
 - MIT License，Copyright (c) Microsoft Corporation。授權與它使用的第三方元件見 onnxruntime-LICENSE.txt、onnxruntime-ThirdPartyNotices.txt。
 
+Microsoft DirectML（只有 DirectML 版：_internal\onnxruntime\capi\DirectML.dll）
+---------------------------------------------------------------------------
+- onnxruntime-directml 套件附帶的 DirectML 可散布元件，未經修改，著作權屬於 Microsoft Corporation。
+- 授權條款見 Microsoft.AI.DirectML 套件的授權：https://www.nuget.org/packages/Microsoft.AI.DirectML/ （License）。
+
+FFmpeg（Qt Multimedia 附帶：_internal\PySide6\avcodec-63.dll、avformat-63.dll、avutil-61.dll、swresample-7.dll、swscale-10.dll）
+--------------------------------------------------------------------------------------------------------------
+- 單字本的朗讀用到 Qt 的語音、多媒體模組，PySide6 一併附帶 Qt 官方編譯的 FFmpeg 程式庫（LGPL 設定編譯，不含 GPL 元件）。
+- 授權：GNU Lesser General Public License v2.1 或之後的版本（LGPL-2.1-or-later；可依 LGPL v3 散布，全文見 LGPL-3.0.txt）。
+- 以動態連結方式使用、未經修改，可以替換成相容版本的 DLL。原始碼：https://ffmpeg.org/download.html ；
+  Qt 的說明：https://doc.qt.io/qt-6/qtmultimedia-attribution-ffmpeg.html
+- 本程式自己的程式碼仍是 Apache License 2.0；以上 LGPL 只適用於這些第三方程式庫本身。
+
 其他 Python 套件
 ----------------
 NumPy（BSD-3-Clause）、OpenCV（Apache-2.0）、Pillow（MIT-CMU）、mss（MIT）、dxcam（MIT）、RapidOCR（Apache-2.0）、

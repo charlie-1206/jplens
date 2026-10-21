@@ -304,7 +304,7 @@ class Recognizer:
         if path is None:
             return None
         try:
-            fd = detect.FastDet(path, [("CUDAExecutionProvider", gpu.CUDA_OPTS), "CPUExecutionProvider"])
+            fd = detect.FastDet(path, gpu.providers())
             img = np.full((320, 640, 3), 245, np.uint8)
             cv2.putText(img, "check 0123", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (20, 20, 20), 4)
             det = self.engine._det
@@ -319,21 +319,20 @@ class Recognizer:
             return None
 
     def _det_to_gpu(self) -> str:
-        """文字偵測（RapidOCR）預設跑 CPU；有 NVIDIA 顯示卡、裝了 onnxruntime-gpu 就改用 GPU：
-        2560×1440 整個螢幕 0.65 → 0.11 秒，輸出幾乎相同（二值化後只有 0.001% 的像素不同）。
+        """文字偵測（RapidOCR）預設跑 CPU；能用顯示卡（gpu.backend()：CUDA 或 DirectML）就改用 GPU：
+        2560×1440 整個螢幕 0.65 → 0.11 秒（CUDA），輸出幾乎相同（二值化後只有 0.001% 的像素不同）。
         沒有顯示卡、沒裝 GPU 版或 GPU 出錯，就維持 CPU（和以前完全一樣）。回傳實際使用的裝置。"""
         try:
             import onnxruntime as ort
-            if not gpu.cuda_ready():
+            if gpu.backend() == "cpu":
                 return "CPU"
             infer = self.engine._det.infer
             so = ort.SessionOptions()
             so.log_severity_level = 3
             so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            # HEURISTIC：預設的 EXHAUSTIVE 每遇到新的輸入尺寸要先試遍演算法（框選備案的裁切圖每次尺寸都不同）
-            cuda = ("CUDAExecutionProvider", gpu.CUDA_OPTS)
-            sess = ort.InferenceSession(infer.session._model_path, so, providers=[cuda, "CPUExecutionProvider"])
-            if "CUDAExecutionProvider" not in sess.get_providers():
+            # CUDA 用 HEURISTIC（gpu.CUDA_OPTS）：預設的 EXHAUSTIVE 每遇到新的輸入尺寸要先試遍演算法（框選備案的裁切圖每次尺寸都不同）
+            sess = ort.InferenceSession(infer.session._model_path, gpu.session_options(so), providers=gpu.providers())
+            if not gpu.on_gpu(sess):
                 return "CPU"
             # 和 CPU 的結果核對一次再換：顯示卡驅動、CUDA 版本不合時寧可用 CPU
             x = np.random.default_rng(0).random((1, 3, 320, 320), dtype=np.float32)

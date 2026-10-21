@@ -31,6 +31,7 @@ _PATHS = {
     "close": '<path d="M5 5l10 10M15 5L5 15"/>',
     "check": '<path d="M4 10.5l4 4 8-9"/>',
     "star": '<path d="M10 2.5l2.3 4.9 5.2.6-3.9 3.6 1.1 5.2L10 14.2l-4.7 2.6 1.1-5.2-3.9-3.6 5.2-.6z"/>',
+    "speaker": '<path d="M3 8v4h3l4.5 3.5v-11L6 8z"/><path d="M13.5 7.5a3.5 3.5 0 010 5M15.5 5a7 7 0 010 10"/>',
     "eye": '<path d="M1.5 10S4.5 4 10 4s8.5 6 8.5 6-3 6-8.5 6S1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.5"/>',
 }
 
@@ -142,6 +143,7 @@ QComboBox QAbstractItemView {{ background: #2b2e36; border: 1px solid {C['card_o
     selection-background-color: {C['btn_hover']}; outline: none; }}
 QRadioButton, QCheckBox {{ font-size: 14px; spacing: 8px; }}
 QScrollArea {{ background: transparent; border: none; }}
+QListView#cards {{ background: transparent; border: none; outline: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: #4a505b; border-radius: 5px; min-height: 28px; }}
@@ -149,6 +151,28 @@ QScrollBar::handle:vertical:hover {{ background: #5a616d; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QToolTip {{ background: #2b2e36; color: {C['text']}; border: 1px solid {C['card_open']}; padding: 4px; }}
+QSpinBox {{ background: {C['input']}; border: 1px solid {C['card_open']}; border-radius: 4px; padding: 3px 6px;
+    font-size: 13px; }}
+QSpinBox:disabled {{ color: {C['dim']}; }}
+QFrame#quizOpt {{ background: {C['card']}; border: 1px solid {C['card_bd']}; border-radius: 8px; }}
+QFrame#quizOpt[state=""]:hover {{ background: #2b2f38; border-color: {C['card_open']}; }}
+QFrame#quizOpt[state="correct"] {{ background: #25352a; border-color: {C['ok']}; }}
+QFrame#quizOpt[state="wrong"] {{ background: #3a2826; border-color: {C['danger']}; }}
+QLabel#quizNum {{ color: {C['dim']}; font-size: 13px; }}
+QLabel#quizOptText {{ font-size: 15px; }}
+QLabel#quizOptText[kind="word"] {{ font-size: 20px; font-family: {JP_FONTS}; }}
+QLabel#quizOptSub {{ color: {C['reading']}; font-size: 13px; font-family: {JP_FONTS}; }}
+QLabel#quizPrompt {{ font-size: 19px; }}
+QLabel#quizPrompt[kind="meaning"] {{ color: #ffffff; font-size: 36px; font-weight: bold; font-family: {JP_FONTS}; }}
+QLabel#quizPromptSub {{ color: {C['reading']}; font-size: 15px; font-family: {JP_FONTS}; }}
+QLabel#quizFeedback {{ font-size: 14px; }}
+QLabel#quizScore {{ color: {C['accent']}; font-size: 32px; font-weight: bold; }}
+QLabel#quizOk {{ color: {C['ok']}; font-size: 16px; }}
+QLabel#quizNg {{ color: {C['danger']}; font-size: 16px; }}
+QLabel#quizResWord {{ font-size: 16px; font-weight: bold; font-family: {JP_FONTS}; }}
+QLabel#pageTitle {{ font-size: 16px; font-weight: bold; }}
+QProgressBar#quizTime {{ background: {C['line']}; border: none; border-radius: 3px; }}
+QProgressBar#quizTime::chunk {{ background: {C['accent']}; border-radius: 3px; }}
 """
 
 

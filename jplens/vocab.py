@@ -10,6 +10,7 @@ marked（重點單字）、learned（已學會），舊的紀錄沒有這兩個�
 
 import json
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,9 +70,75 @@ def _short_pos(pos: str) -> str:
     return ""
 
 
+_POS_FROM_APP = {"n.": "名詞", "v.": "動詞", "adj.": "形容詞", "adv.": "副詞"}
+_ALSO_MEANING = re.compile(r"^讀(.+?)的意思：(.*)$")
+_HAS_CJK = re.compile(r"[㐀-鿿]")
+
+
+def from_app_word(w: dict) -> dict | None:
+    """單字 App 備份檔的一個字 → 單字本紀錄。本程式匯出時把也讀接在 reading（よう；かなめ）、
+    definition（…；讀かなめ的意思：…）後面，這裡拆回 reading、also。沒有單字或解釋的回傳 None。"""
+    term = str(w.get("term") or "").strip()
+    definition = str(w.get("definition") or "").strip()
+    if not term or not definition:
+        return None
+    readings = [x.strip() for x in re.split(r"[；;]", str(w.get("reading") or "")) if x.strip()]
+    reading = readings[0] if readings else term
+    also_mean, senses = {}, []
+    for part in (x.strip() for x in re.split(r"[；;]", definition)):
+        m = _ALSO_MEANING.match(part)
+        if m:
+            also_mean[m.group(1)] = m.group(2)
+        elif part:
+            senses.append(part)
+    try:
+        saved_at = datetime.fromtimestamp(int(w.get("date")) / 1000).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OSError):
+        saved_at = datetime.now().isoformat(timespec="seconds")
+    zh = bool(_HAS_CJK.search(definition))
+    jlpt = str(w.get("jlpt") or "").upper()
+    return {
+        "word": term, "reading": reading, "pos": _POS_FROM_APP.get(str(w.get("type") or "").strip(), ""),
+        "jlpt": jlpt if jlpt in APP_LEVELS else "",
+        "meaning_zh": senses if zh else [], "meaning_en": [] if zh else senses,
+        "sentence": str(w.get("example") or ""), "also": [[rd, also_mean.get(rd, "")] for rd in readings[1:]],
+        "comment": str(w.get("comment") or ""), "saved_at": saved_at,
+        "marked": w.get("isMarked") in (1, True, "1"), "learned": False,
+    }
+
+
+def parse_import(text: str) -> list[dict]:
+    """匯入檔的內容 → 紀錄列表。單字 App 備份（JSON，有 words）或完整備份（一行一個紀錄）。"""
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("words"), list):
+        version = data.get("version") or 1
+        if not isinstance(version, int) or version > 2:
+            raise ValueError(f"備份檔的版本（{version}）比這個程式支援的新")
+        return [r for r in (from_app_word(w) for w in data["words"] if isinstance(w, dict)) if r]
+    out = []
+    for line in text.splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("word"):
+            out.append(r)
+    if not out:
+        raise ValueError("看不懂這個檔案：要單字 App 的備份檔或單字本的完整備份（.jsonl）")
+    return out
+
+
 class VocabStore:
     def __init__(self, path: Path = SAVED):
         self.listeners = []  # 紀錄改變時呼叫（單字本視窗用來重新整理）
+        self.dictionary = None  # 舊紀錄沒有「也讀」時拿來補查（App 設定；沒有就不補）
+        self._also_cache: dict[str, list] = {}
         self._backed_up: set[Path] = set()
         self.set_path(path)
 
@@ -103,6 +170,7 @@ class VocabStore:
             "meaning_zh": w.zh,
             "meaning_en": w.en or ([w.jlpt_en] if w.jlpt_en else []),
             "sentence": w.sentence,
+            "also": [[rd, mean] for rd, mean in w.also],  # 同寫法的其他常用讀音（結果視窗的「也讀」）
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "marked": False,
             "learned": False,
@@ -113,6 +181,28 @@ class VocabStore:
         self._keys.add(_key(w.word, w.reading))
         self._changed()
         return True
+
+    def also_of(self, rec: dict) -> list[tuple[str, str]]:
+        """單字的「也讀」[(讀音, 意思)]。2026-10-21 以前記錄的沒有 also 欄位：用字典現查補上（不寫回檔案）。"""
+        if "also" in rec:
+            return [(rd, mean) for rd, mean in rec.get("also") or []]
+        if self.dictionary is None or rec.get("jlpt") in ("專有名詞", "文法") or rec.get("pos") == "文法":
+            return []
+        key = key_of(rec)
+        if key not in self._also_cache:
+            try:
+                self._also_cache[key] = self.dictionary.other_readings(rec.get("word", ""), rec.get("reading", ""))
+            except Exception:
+                self._also_cache[key] = []
+        return self._also_cache[key]
+
+    def reading_with_also(self, rec: dict) -> str:
+        """讀音後面接也讀：「よう；かなめ」（單字本卡片、複製、匯出共用；紀錄裡的 reading 不變，查重複、uid 才對得上）。"""
+        return "；".join([rec.get("reading", "")] + [rd for rd, _ in self.also_of(rec)])
+
+    def also_meanings(self, rec: dict) -> list[str]:
+        """也讀的意思接在原本的意思後面：「讀かなめ的意思：樞紐、關鍵」（裡面改用頓號，才不會和意思之間的「；」混在一起）。"""
+        return [f"讀{rd}的意思：{mean.replace('；', '、')}" for rd, mean in self.also_of(rec)]
 
     # ---------------------------------------------------------------- 單字本視窗：修改、刪除
     def _rewrite(self, path: Path, records: list[dict]):
@@ -161,6 +251,80 @@ class VocabStore:
             return
         records.insert(min(idx, len(records)), rec)
         self._save_records(records)
+
+    def add_record(self, rec: dict) -> bool:
+        """手動新增一個單字（單字本視窗的「新增單字」）；已經有了回傳 False。"""
+        if key_of(rec) in self._keys:
+            return False
+        rec = {"pos": "", "jlpt": "", "meaning_zh": [], "meaning_en": [], "sentence": "", "also": [],
+               "saved_at": datetime.now().isoformat(timespec="seconds"), "marked": False, "learned": False, **rec}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._keys.add(key_of(rec))
+        self._changed()
+        return True
+
+    def clear(self) -> tuple[list[dict], Path | None]:
+        """清空單字本：先把整個檔案另存成 saved_words.cleared-時間.jsonl（關掉程式後還找得回來），
+        回傳 (清掉的紀錄, 備份檔) 給 restore_all() 復原。"""
+        old = self.records()
+        backup = None
+        if old:
+            backup = self.path.with_name(f"{self.path.stem}.cleared-{datetime.now():%Y%m%d-%H%M%S}.jsonl")
+            shutil.copy2(self.path, backup)
+        self._save_records([])
+        return old, backup
+
+    def restore_all(self, recs: list[dict]):
+        """清空後按「復原」：放回清掉的紀錄（清空後又新增的照樣保留，排在後面）。"""
+        now = self.records()
+        keys = {key_of(r) for r in recs}
+        self._save_records(recs + [r for r in now if key_of(r) not in keys])
+
+    # ---------------------------------------------------------------- 匯入
+    def import_file(self, path: Path) -> dict:
+        """匯入單字：單字 App 的備份檔（version 1、2，本程式匯出的也是這個格式）或本程式的完整備份（.jsonl）。
+        單字本已經有的字（同寫法同讀音）不重複加入，只補空的欄位、把重點單字的標記合起來。
+        回傳 {"added", "updated", "skipped"} 的數量。格式不對時丟 ValueError。"""
+        text = Path(path).read_text(encoding="utf-8-sig")
+        incoming = parse_import(text)
+        records = self.records()
+        index = {key_of(r): i for i, r in enumerate(records)}
+        added = updated = skipped = 0
+        seen = set()
+        for rec in incoming:
+            k = key_of(rec)
+            if k in seen or not rec.get("word"):
+                skipped += 1
+                continue
+            seen.add(k)
+            if k not in index:
+                index[k] = len(records)
+                records.append(rec)
+                added += 1
+                continue
+            old = records[index[k]]
+            new = dict(old)
+            for f in ("pos", "jlpt", "meaning_zh", "meaning_en", "sentence", "also", "comment"):
+                if not new.get(f) and rec.get(f):
+                    new[f] = rec[f]
+            new["marked"] = bool(old.get("marked") or rec.get("marked"))
+            new["learned"] = bool(old.get("learned") or rec.get("learned"))
+            if new != old:
+                records[index[k]] = new
+                updated += 1
+            else:
+                skipped += 1
+        if added or updated:
+            self._save_records(records)
+        return {"added": added, "updated": updated, "skipped": skipped}
+
+    def export_jsonl(self, out: Path, records: list[dict] | None = None) -> int:
+        """完整備份（所有欄位，含已學會、英文意思、也讀），之後可以用 import_file 匯回來。"""
+        recs = self.records() if records is None else records
+        out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8", newline="\n")
+        return len(recs)
 
     # ---------------------------------------------------------------- 原句
     @property
@@ -234,15 +398,17 @@ class VocabStore:
             except (KeyError, ValueError):
                 ms = 0
             definition = "；".join(r.get("meaning_zh") or []) or "; ".join(r.get("meaning_en") or [])
+            # 也讀：App 的格式沒有這個欄位（version 不能升），讀音接在 reading 後面、意思接在解釋後面；uid 不變（App 才認得是同一個字）
+            definition = "；".join(([definition] if definition else []) + self.also_meanings(r))
             words.append({
                 "id": i,
                 "term": r["word"],
                 "type": _short_pos(r.get("pos", "")),
                 "definition": definition,
-                "comment": "",
+                "comment": r.get("comment", ""),  # 從單字 App 匯入的筆記照樣帶回去
                 "isMarked": 1 if r.get("marked") else 0,
                 "date": ms,
-                "reading": "" if r.get("reading") == r["word"] else r.get("reading", ""),
+                "reading": "" if r.get("reading") == r["word"] else self.reading_with_also(r),
                 "example": one_line(r.get("sentence", "")),
                 "jlpt": r.get("jlpt") if r.get("jlpt") in APP_LEVELS else "",
                 "uid": uid_of(r),

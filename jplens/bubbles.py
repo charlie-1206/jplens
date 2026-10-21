@@ -64,7 +64,7 @@ class BubbleDetector:
         import onnxruntime as ort
 
         from . import gpu as _gpu
-        gpu = _gpu.cuda_ready()  # 有 NVIDIA 顯示卡、而且找得到 CUDA 程式庫（不然 ONNX Runtime 會悄悄退回 CPU）
+        gpu = _gpu.backend() != "cpu"  # 能用顯示卡（CUDA 要找得到程式庫、DirectML 要比 CPU 快）
         if path is None:
             prefer = [MODEL_GPU, MODEL_CPU] if gpu else [MODEL_CPU, MODEL_GPU]
             path = next((p for p in prefer if p.exists()), prefer[0])
@@ -75,8 +75,8 @@ class BubbleDetector:
         so.add_session_config_entry("session.intra_op.allow_spinning", "0")  # 不和其他 session 搶 CPU（見 ocr._make_rapidocr）
         providers = _gpu.providers()
         self.path = path
-        self.sess = ort.InferenceSession(str(path), so, providers=providers)
-        self.device = "GPU" if self.sess.get_providers()[0] == "CUDAExecutionProvider" else "CPU"
+        self.sess = ort.InferenceSession(str(path), _gpu.session_options(so), providers=providers)
+        self.device = "GPU" if _gpu.on_gpu(self.sess) else "CPU"
 
     def detect(self, img: np.ndarray) -> list[Bubble]:
         h, w = img.shape[:2]

@@ -141,6 +141,7 @@ class Worker:
             self.rec.warmup()
             analysis.tokenize("準備できました")
             analysis.jlpt_table()
+            extract(["準備できました。計画を練り直して読み始めた。"], self.dictionary)  # 第一次查字要載入文法規則、中文意思（約 0.15 秒）
             self.ready = True
             msg = (f"就緒（載入 {time.perf_counter() - t:.0f} 秒，文字偵測用 {self.rec.det_device}、"
                    f"辨識用 {self.rec.rec_device}）")
@@ -198,7 +199,7 @@ class Worker:
         """框選：決定怎麼讀（layout.plan_box，橫排小字會放大重新偵測、直排小說找欄），再交給對應的讀法。
         在背景執行緒做，主執行緒不用等找欄、放大偵測。"""
         from .layout import plan_box
-        how, arg = plan_box(img, lines, box, self.rec.detect_screen)
+        how, arg = plan_box(img, lines, box, self.rec.detect_screen, self.rec.read_segment_parts)
         if how == "whole":
             self._do_whole(job_id, img, *arg)
         elif how == "lines":
@@ -360,6 +361,7 @@ class App:
         self.cfg = Config.load()
         self.dictionary = Dictionary()
         self.vocab = VocabStore(self.cfg.vocab_path / SAVED_NAME)
+        self.vocab.dictionary = self.dictionary  # 舊紀錄沒有「也讀」時補查
         self.manager = None    # 單字本視窗（開啟時才建立，關掉就釋放）
         self.settings = None   # 設定視窗
         self.bridge = Bridge()
@@ -372,7 +374,8 @@ class App:
         self.job_id = 0
         self.layout_id = 0
         self._sct = None
-        self._dxcam = None     # DXGI 擷取（dxcam）：None＝還沒試、False＝不能用（多螢幕、沒裝、出錯）
+        self._dxcam = None     # DXGI 擷取（dxcam）：None＝準備中、False＝不能用（多螢幕、沒裝、出錯）
+        threading.Thread(target=self._prepare_dxcam, name="dxcam", daemon=True).start()
         self._dx_last = None   # dxcam 上一次擷取到的畫面（畫面沒變時 grab() 回傳 None，沿用這張）
         self._last = None      # (上一次的圖, 辨識出的文字, 其他資訊)
         self._corrected = None  # 使用者在結果視窗改過、重查的原文（保存畫面時當正確答案的預設值）
@@ -545,19 +548,26 @@ class App:
         return self._grab(*mon)
 
     def _dx_camera(self):
-        if self._dxcam is None:
+        """準備好的 dxcam；還在準備（None）或不能用（False）時回傳 False，改用 mss。"""
+        return self._dxcam or False
+
+    def _prepare_dxcam(self):
+        """背景執行緒：先 import、建立 dxcam 並擷取一次。第一次要 1～2 秒（import 0.5、create 0.7、第一張 0.9），
+        原本在第一次按 Alt 時才在主執行緒做，畫面會卡一下。建好的物件主執行緒可以直接用（實測每張 3 ms）。"""
+        try:
+            import mss
+            with mss.mss() as sct:  # mss 物件不能跨執行緒：這裡另外開一個只用來數螢幕
+                single = len(sct.monitors) == 2  # monitors[0] 是所有螢幕合起來；只有一個實體螢幕
+            if not single:
+                raise RuntimeError("多螢幕")
+            import dxcam
+            cam = dxcam.create(output_color="BGR")
+            self._dx_last = cam.grab()
+            self._dxcam = cam
+            log.info("DXGI 擷取準備好了")
+        except Exception as e:
+            log.info("不用 DXGI 擷取（%s），用 mss", e)
             self._dxcam = False
-            try:
-                import mss
-                if self._sct is None:
-                    self._sct = mss.mss()
-                if len(self._sct.monitors) == 2:  # monitors[0] 是所有螢幕合起來；只有一個實體螢幕
-                    import dxcam
-                    self._dxcam = dxcam.create(output_color="BGR")
-            except Exception as e:
-                log.info("不用 DXGI 擷取（%s），用 mss", e)
-                self._dxcam = False
-        return self._dxcam
 
     def _prepare_screen(self, x, y):
         """擷取游標所在的螢幕，交給背景偵測文字行。"""
@@ -851,6 +861,7 @@ class App:
         how = "沿著文字拖曳反白" if self.text_mode else "拖曳框選（漫畫模式也可以雙擊對話框）" if self.manga_mode else "拖曳框選"
         self.spinner.stop("model")
         self._preload_bubbles()
+        QTimer.singleShot(0, self.popup.warm_up)  # 第一次出結果不要卡（載入字型，約 0.3 秒）
         if self.admin:
             msg += "（系統管理員）"
         self.status_action.setText(msg)
@@ -1153,6 +1164,20 @@ def selftest() -> int:
         out.append(f"無字幕模式：模型 {'OK' if listen.model_ready() else '找不到'}、sherpa-onnx、pyaudiowpatch OK；"
                    f"倍速放慢用{'PyAV atempo' if listen._atempo_ok else '調整取樣率'}")
         ok = ok and listen.model_ready()
+        # 單字測驗：語意模型（tokenizers＋onnxruntime）有帶進去，同義的分數高、無關的低
+        import tempfile
+        from pathlib import Path
+        from . import quiz
+        sem = quiz.Semantic(cache=Path(tempfile.mkdtemp()) / "v.npz")
+        v = sem.vectors(["即刻", "即時", "窗戶"])
+        same, other = float(v["即刻"] @ v["即時"]), float(v["即刻"] @ v["窗戶"])
+        out.append(f"單字測驗：語意模型 {'OK' if sem.ok else '找不到'}（即刻／即時 {same:.2f}、即刻／窗戶 {other:.2f}）")
+        ok = ok and sem.ok and same >= quiz.SAME_SIM > other
+        # 單字本的朗讀：Qt 的語音外掛有帶進去（有沒有日文語音看那台電腦，不算失敗）
+        from PySide6.QtTextToSpeech import QTextToSpeech
+        engines = [e for e in QTextToSpeech.availableEngines() if e != "mock"]
+        out.append(f"朗讀：語音引擎 {'、'.join(engines) or '沒有'}")
+        ok = ok and "winrt" in engines
     except Exception:
         out.append(traceback.format_exc())
         ok = False

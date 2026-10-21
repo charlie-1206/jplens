@@ -138,6 +138,8 @@ class Dictionary:
         self._local = threading.local()  # sqlite 連線不能跨執行緒共用
         self._zh_paths = [zh_path, zh_api_path]  # 前面的優先（手動翻的日檢詞 → API 翻的其他詞）
         self._zh_mtime = None
+        self._same_cache: dict[tuple[str, str], bool] = {}
+        self._entry_cache: dict[tuple[str, str, str], bool] = {}
         self._zh_seq: dict[str, list[str]] = {}   # JMdict 條目編號 → 各意思的中文
         self._zh_word: dict[str, list[str]] = {}  # JMdict 找不到的詞（編號 J…）：寫法 → 中文
 
@@ -193,6 +195,20 @@ class Dictionary:
                  json.loads(mc) if mc else None)
                 for _, src, pos, rd, ss, sp, seq, zh, mc in self._db().execute(q, keys)]
 
+    def same_word(self, a: str, b: str) -> bool:
+        """a、b 是不是 JMdict 同一個條目的寫法（いう／言う、だいぶ／大分）。a 字典裡沒有就當成是（沒有反證）。"""
+        if not self.ok:
+            return True
+        key = (a, b)
+        if key not in self._same_cache:
+            q = ("SELECT k.key, e.seq FROM keys k JOIN entries e ON e.id = k.entry_id "
+                 "WHERE k.key IN (?, ?) AND e.src = 'jmdict'")
+            seqs = {a: set(), b: set()}
+            for k, seq in self._db().execute(q, (a, b)):
+                seqs[k].add(seq)
+            self._same_cache[key] = not seqs[a] or bool(seqs[a] & seqs[b])
+        return self._same_cache[key]
+
     def existing_phrases(self, keys) -> set[str]:
         """慣用說法用的 existing：純假名的寫法容易配到同音的別的詞（こうする → 攻する、そうする → 奏する），
         只接受「字典的標題就是這樣寫」或詞性是慣用語／副詞等不會被誤配的條目。"""
@@ -225,6 +241,20 @@ class Dictionary:
                 if e[0] == src and e[2]:
                     return e[2][0]
         return ""
+
+    def same_entry(self, word: str, a: str, b: str) -> bool:
+        """a、b 是不是 JMdict 同一個條目（標題是 word）的兩個讀音，也就是同一個詞的不同念法（言う：いう／ゆう）。
+        不同條目的讀音（辛い からい／つらい、汚す よごす／けがす）是不同的詞。"""
+        if not self.ok or not word or not a or not b:
+            return False
+        key = (word, a, b)
+        if key not in self._entry_cache:
+            a, b = analysis.to_hira(a), analysis.to_hira(b)
+            q = ("SELECT e.readings FROM keys k JOIN entries e ON e.id = k.entry_id "
+                 "WHERE k.key = ? AND e.word = ? AND e.src = 'jmdict'")
+            self._entry_cache[key] = any({a, b} <= {analysis.to_hira(r) for r in json.loads(rd)}
+                                         for (rd,) in self._db().execute(q, (word, word)))
+        return self._entry_cache[key]
 
     def other_readings(self, word: str, reading: str) -> list[tuple[str, str]]:
         """同一個寫法的其他常用讀音：[(讀音, 意思)…]，最多 MAX_ALSO 個。

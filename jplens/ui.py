@@ -733,6 +733,16 @@ class ResultPopup(QWidget):
         self.show()
         self.raise_()
 
+    def warm_up(self):
+        """啟動後先在背景畫一次（不顯示）：第一次算標題列按鈕的大小、畫日文和符號（📌、✕）時，
+        Qt 要載入字型、找替代字型，約 0.3～0.6 秒，不先做的話第一次查字出結果時會卡一下。"""
+        self._set_title(self.title.text() or " ")
+        probe = QLabel("日本語の文字を読み込みます。漢字ひらがなカタカナ　繁體中文的意思 N1〜N5 ＋ 記錄 📌 ✕ ↻", self)
+        probe.adjustSize()
+        probe.grab()
+        probe.deleteLater()
+        self.grab()
+
     def _set_title(self, text: str):
         """標題和右邊的控制項放得下就同一行，放不下就把標題移到下一行。"""
         self.title.setText(text)

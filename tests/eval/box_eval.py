@@ -58,7 +58,7 @@ def run(f, box, manga=False):
             H, W = img.shape[:2]
             texts = [textutil.fix_common_ocr(textutil.clean(t)) for t in rec.read_regions(img, [b.crop(W, H) for b in hits])]
             return f"漫畫×{len(hits)}", "".join(texts)
-    how, arg = plan_box(img, lines, box, rec.detect_screen)  # 和 app 相同：橫排小字放大重新偵測
+    how, arg = plan_box(img, lines, box, rec.detect_screen, rec.read_segment_parts)  # 和 app 相同：橫排小字放大重新偵測
     if how == "whole":
         text = textutil.fix_common_ocr(textutil.clean(rec.read_whole(img, *arg)))
     elif how == "lines":

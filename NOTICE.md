@@ -45,6 +45,7 @@ Copyright 2026 charlie-1206
 | 漫畫文字區塊偵測 | [ogkalu/comic-text-and-bubble-detector](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) | Apache-2.0 | |
 | ReazonSpeech k2 v2（無字幕模式的語音辨識） | [reazon-research/reazonspeech-k2-v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)，經 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 轉成 ONNX 的版本 | Apache-2.0 | 只帶 int8 量化版 |
 | Silero VAD v4、v6（無字幕模式的語音偵測） | [snakers4/silero-vad](https://github.com/snakers4/silero-vad) | MIT | v4 經 sherpa-onnx 發布的版本 |
+| bge-small-zh-v1.5（單字測驗判斷選項有沒有同義） | [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)、ONNX 版 [Xenova/bge-small-zh-v1.5](https://huggingface.co/Xenova/bge-small-zh-v1.5) | MIT | 用 Xenova 的 int8 量化版 |
 
 ## Python 套件
 
@@ -53,6 +54,7 @@ Copyright 2026 charlie-1206
 | PySide6（Qt for Python） | LGPL-3.0（打包散布時以動態連結方式使用，附 LGPL 全文與 Qt 原始碼的取得方式，使用者可以替換） |
 | ONNX Runtime | MIT |
 | sherpa-onnx | Apache-2.0 |
+| tokenizers（Hugging Face） | Apache-2.0 |
 | PyAudioWPatch（含 PortAudio） | MIT |
 | RapidOCR（rapidocr-onnxruntime） | Apache-2.0 |
 | SudachiPy、SudachiDict-core | Apache-2.0 |

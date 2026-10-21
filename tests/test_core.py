@@ -138,6 +138,9 @@ def test_reading_by_context():
     assert by["来る"].reading == "くる" and by["来る"].level == 5  # 不是「来る（きたる）N1」
     assert by["風"].reading == "ふう"  # 不是 かぜ
     assert by["止める"].reading == "とめる"  # 不是 やめる
+    by = {w.word: w for w in extract(["そんな風に言うな。入学の準備をした。"], d)}
+    assert by["言う"].reading == "いう" and by["言う"].level == 5  # 原文就是辭書形：Sudachi 給 ゆう（JMdict 同一條目）
+    assert by["入学"].reading == "にゅうがく" and by["準備"].reading == "じゅんび"  # 表上的讀音欄寫「にゅうがくする」
 
 
 def test_expressions():
@@ -164,6 +167,27 @@ def test_expressions():
         assert bad not in words(s), (s, bad)
     dekiru = words("突破出来てた")["出来る"]  # 表上寫假名「できる」
     assert dekiru.level == 5 and "able" in " ".join(dekiru.en)
+    # 2026-10-21：動詞＋文語助動詞、慣用語中間的助詞被換掉
+    for s, want in (("その名を世に知らしめた", "知らしめる"), ("思わず笑った", "思わず"), ("気もつかなかった", "気がつく"),
+                    ("腹は立つ", "腹が立つ"), ("手には負えない", "手に負えない")):
+        assert want in words(s), (s, want)
+    assert not {"すべし", "せず"} & set(words("すぐに出発すべし。何もせず待つ"))  # する＋助動詞是文法
+
+
+def test_norm_variants():
+    """Sudachi 的標準寫法只在是同一個詞時才用（2026-10-21：乗っかる 被查成 乗る）。"""
+    d = Dictionary()
+    if not d.ok:
+        return
+
+    def words(s):
+        return {w.word for w in extract([s], d)}
+    assert "乗っかる" in words("補正が乗っかる") and "乗る" not in words("補正が乗っかる")  # 口語變體是另一個詞
+    assert "抑える" in words("出費を抑える")                       # 字典裡和 押さえる 是不同條目
+    assert "引っ張る" in words("ひっぱる")                         # 同一條目的假名寫法 → 標準寫法
+    assert "大分" in words("だいぶ寒い") and "言う" in words("ことにいうものは")  # Sudachi 單獨念漢字會念錯，不能比讀音
+    assert "言う" in words("胸張って言える")                       # 可能動詞照舊列原本的動詞
+    assert "若い" in words("若き獅子") and "愛する" in words("愛されたい")  # 文語、〜す 的舊形列現代的辭書形
 
 
 def test_grammar_points():
@@ -180,6 +204,22 @@ def test_grammar_points():
     assert "〜ので" in names and "〜のだ／〜んです" not in names
     # 同一條文法在幾段文字裡只列一次
     assert sum(w.word == "〜と思う" for w in extract(["そう思う。", "いいと思った。"], d)) == 1
+
+
+def test_grammar_in_compound_word():
+    """文法靠字尾比對到一個複合詞（練り直す、読み方）時，詞本身照樣列，前半的動詞也列；
+    「〜方」不比對 粗方（あらかた）、夕方 這類前半不是動詞的名詞（使用者 2026-10-18 回報）。"""
+    d = Dictionary()
+    names = [w.word for w in extract(["計画を練り直した"], d)]
+    assert {"練り直す", "練る", "〜なおす（直す）"} <= set(names)
+    names = [w.word for w in extract(["塗り直した"], d)]
+    assert "塗る" in names  # 單獨的「塗り」Sudachi 斷成名詞，要接ます再斷
+    assert "やる" in [w.word for w in extract(["やり直したい"], d)]  # 標準寫法是「遣り直す」，前半照原文寫
+    names = [w.word for w in extract(["この漢字の読み方"], d)]
+    assert {"読み方", "読む", "〜方（かた）"} <= set(names)
+    for text, word in (("あらかた終わった", "あらかた"), ("夕方に帰る", "夕方"), ("両方とも", "両方"), ("地方の町", "地方")):
+        ws = extract([text], d)
+        assert word in [w.word for w in ws] and "〜方（かた）" not in [w.word for w in ws], text
 
 
 def test_gemini_translation_first():
@@ -251,6 +291,120 @@ def test_vocab_add_dedupe_and_export():
         store.restore(idx, rec)
         assert store.has(w) and store.records()[0]["learned"] is True
         assert Path(str(store.path) + ".bak").exists()  # 第一次重寫前備份原檔
+
+
+def test_vocab_also_readings():
+    """「也讀」記進單字本、匯出時接在解釋後面；以前記錄的（沒有 also 欄位）用字典現查補上（2026-10-21 使用者要求）。"""
+    with tempfile.TemporaryDirectory() as d:
+        store = VocabStore(Path(d) / "saved.jsonl")
+        w = WordInfo(word="要", reading="よう", pos="名詞", level=3, proper=False, sentence="要は気持ちだ。",
+                     zh=["要點"], also=[("かなめ", "樞紐；關鍵")])
+        store.add(w)
+        rec = store.records()[0]
+        assert rec["also"] == [["かなめ", "樞紐；關鍵"]] and store.also_of(rec) == [("かなめ", "樞紐；關鍵")]
+        out = Path(d) / "export.txt"
+        store.export_app_backup(out)
+        a = json.loads(out.read_bytes())["words"][0]
+        # 讀音接在後面、意思接上「讀〇〇的意思」（2026-10-21 使用者要求改成這樣）
+        assert a["definition"] == "要點；讀かなめ的意思：樞紐、關鍵" and a["reading"] == "よう；かなめ" and a["uid"] == "jplens:要|よう"
+        assert store.reading_with_also(rec) == "よう；かなめ" and store.has(w) and not store.add(w)  # 紀錄的 reading 不變，查重複照舊
+        old = {"word": "要", "reading": "よう", "pos": "名詞", "jlpt": "N3", "meaning_zh": ["要點"]}  # 舊紀錄
+        assert store.also_of(old) == []  # 沒有字典就不補
+        store.dictionary = Dictionary()
+        assert [rd for rd, _ in store.also_of(old)] == [rd for rd, _ in Dictionary().other_readings("要", "よう")]
+
+
+def test_vocab_import_clear_add():
+    """匯入（單字 App 備份、完整備份）、清空與復原、手動新增（2026-10-21）。"""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        src = VocabStore(d / "a" / "saved_words.jsonl")
+        src.add(WordInfo(word="要", reading="よう", pos="名詞", level=3, proper=False, sentence="要は気持ちだ。",
+                         zh=["要點"], also=[("かなめ", "樞紐；關鍵")]))
+        src.update(key_of(src.records()[0]), marked=True)
+        src.export_app_backup(d / "app.txt")
+        dst = VocabStore(d / "b" / "saved_words.jsonl")
+        assert dst.import_file(d / "app.txt") == {"added": 1, "updated": 0, "skipped": 0}
+        r = dst.records()[0]  # 匯出時接在後面的也讀拆回來
+        assert (r["word"], r["reading"], r["meaning_zh"], r["also"], r["marked"]) == \
+            ("要", "よう", ["要點"], [["かなめ", "樞紐、關鍵"]], True)
+        assert dst.import_file(d / "app.txt")["skipped"] == 1  # 再匯一次：已經有了
+        # 單字 App 自己的字：沒有 uid、解釋用空白隔開、同一個字出現兩次
+        app = {"version": 2, "words": [
+            {"term": "時々", "type": "adv.", "definition": "有時 偶爾", "isMarked": 1, "date": 1700000000000,
+             "reading": "ときどき", "example": "", "jlpt": "N5", "comment": "筆記", "uid": None},
+            {"term": "時々", "definition": "重複", "reading": "ときどき"},
+            {"term": "", "definition": "沒有單字"}]}
+        (d / "app2.json").write_text(json.dumps(app, ensure_ascii=False), encoding="utf-8")
+        assert dst.import_file(d / "app2.json") == {"added": 1, "updated": 0, "skipped": 1}
+        t = next(r for r in dst.records() if r["word"] == "時々")
+        assert t["pos"] == "副詞" and t["jlpt"] == "N5" and t["comment"] == "筆記" and t["marked"]
+        try:
+            (d / "v3.json").write_text('{"version": 3, "words": []}', encoding="utf-8")
+            dst.import_file(d / "v3.json")
+            assert False, "version 3 應該拒絕"
+        except ValueError:
+            pass
+        # 完整備份來回
+        dst.export_jsonl(d / "full.jsonl")
+        assert dst.add_record({"word": "新しい", "reading": "あたらしい", "meaning_zh": ["新的"]})
+        assert not dst.add_record({"word": "新しい", "reading": "あたらしい"})
+        old, backup = dst.clear()
+        assert dst.records() == [] and len(old) == 3 and backup.exists()
+        dst.add_record({"word": "後で", "reading": "あとで", "meaning_zh": ["之後"]})
+        dst.restore_all(old)
+        assert [r["word"] for r in dst.records()] == ["要", "時々", "新しい", "後で"]
+        dst.clear()
+        assert dst.import_file(d / "full.jsonl")["added"] == 2
+
+
+def test_quiz_unique_options():
+    """測驗：選項的意思不能重疊（同一個說法、語意相近、使用者按過「這個也對」），選項之間不能長得一樣。"""
+    import random
+    from jplens import quiz
+
+    def rec(w, rd, zh, pos="名詞"):
+        return {"word": w, "reading": rd, "meaning_zh": zh, "pos": pos}
+    pool = [rec("即座", "そくざ", ["即刻、當場"]), rec("早急", "さっきゅう", ["即時、迅速"]),
+            rec("毛布", "もうふ", ["毛毯、毯子"]), rec("羽毛", "うもう", ["羽毛"]), rec("布団", "ふとん", ["被褥、棉被"]),
+            rec("机", "つくえ", ["桌子"]), rec("椅子", "いす", ["椅子"]), rec("窓", "まど", ["窗戶"]),
+            rec("緒", "いとぐち", ["開端、起點"]), rec("端", "はし", ["開頭、起端；邊緣"]),
+            rec("要", "よう", ["要點"]), rec("要", "かなめ", ["樞紐"])]
+    with tempfile.TemporaryDirectory() as d:
+        same = quiz.SamePairs(Path(d) / quiz.SAME_NAME)
+        sem = quiz.Semantic(cache=Path(d) / "vec.npz")
+        qm = quiz.QuizMaker(pool, key_of, sem if sem.ok else None, same, rand=random.Random(1))
+        by = {(r["word"], r["reading"]): r for r in pool}
+        assert qm.same_meaning(by["要", "よう"], by["要", "かなめ"])  # 同寫法：選單字時看不出差別
+        if sem.ok:  # 用字不同、意思相近（字串比對抓不到）
+            assert qm.same_meaning(by["即座", "そくざ"], by["早急", "さっきゅう"])
+            assert qm.same_meaning(by["緒", "いとぐち"], by["端", "はし"])
+            assert not qm.same_meaning(by["机", "つくえ"], by["窓", "まど"])
+        assert not qm.same_meaning(by["机", "つくえ"], by["椅子", "いす"])
+        same.add(key_of(by["机", "つくえ"]), key_of(by["椅子", "いす"]))
+        assert qm.same_meaning(by["机", "つくえ"], by["椅子", "いす"])
+        assert quiz.SamePairs(Path(d) / quiz.SAME_NAME).has(key_of(by["椅子", "いす"]), key_of(by["机", "つくえ"]))
+        for mode in ("meaning", "word"):
+            for q in qm.make(pool, mode, 20):
+                labels = [q.label(i) for i in range(4)]
+                assert len(set(labels)) == 4 and q.options[q.answer] is q.target
+                assert not any(qm.same_meaning(q.target, o) for o in q.options if o is not q.target), labels
+        # 毛布（看單字選意思）：混淆選項優先挑有「毛」「布」的意思，不能光看漢字就猜到
+        hits = sum(any("毛" in quiz.shown(o) for o in qm.question(by["毛布", "もうふ"], "meaning").options
+                       if o is not by["毛布", "もうふ"]) for _ in range(10))
+        assert hits >= 8
+        # 單字本太少：從 extra 補
+        small = quiz.QuizMaker(pool[:2], key_of, None, None, extra=lambda t, n: pool[5:8], rand=random.Random(2))
+        assert small.question(pool[0], "meaning") is not None
+        # 補的選項之間同寫法：一個一個比，不會因為去重湊不滿 3 個而整題沒了
+        dup = [{"word": "鉛筆", "reading": "えんぴつ", "meaning_zh": [f"鉛筆{i}"]} for i in range(3)] + pool[5:8]
+        small = quiz.QuizMaker(pool[:1], key_of, None, None, extra=lambda t, n: dup, rand=random.Random(3))
+        assert small.question(pool[0], "meaning") is not None
+    # 意思片段：結尾的「的／地」去掉一個、至少留兩個字（目的、墓地 不能變成 目、墓）
+    assert quiz.glosses({"meaning_zh": ["目的；墓地", "迷人的、唐突地", "漫無目的地", "地位較低者"]}) == \
+        ["目的", "墓地", "迷人", "唐突", "漫無目的", "地位較低者"]
+    # 日文新字體和繁體中文比得起來（色気 的 気 ／ 香氣）
+    assert quiz.kanji("色気") & quiz.kanji("香氣、芳香") and quiz.kanji("発表") & quiz.kanji("發表")
 
 
 def test_sentence_record():
