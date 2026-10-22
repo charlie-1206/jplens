@@ -2,16 +2,29 @@
 
 在 Windows 上**按住 Alt、用滑鼠拖曳**選取畫面上的日文（遊戲、動畫暫停畫面、漫畫、小說，橫排直排都可以），
 馬上列出選到的單字：讀音、日檢級數、詞性、繁體中文意思，下面再列出句子裡的**文法句型**（例如「〜と思う」「〜かもしれない」）。
-想記的字、文法、句子按「＋ 記錄」存進單字本，可以搜尋、篩選、標重點，再匯出到單字 App。
+想記的字、文法、句子按「＋ 記錄」存進單字本，可以搜尋、篩選、標重點、**做單字測驗**、**朗讀**，再匯出到單字 App。
 
 - 全部在自己的電腦上跑（文字辨識用 [manga-ocr](https://github.com/kha-white/manga-ocr)、斷詞用 Sudachi），不用網路、不用 API。
-- 有 NVIDIA 顯示卡時放開滑鼠到出結果約 0.1～0.5 秒；沒有也能用（CPU，慢很多）。
+- 有 NVIDIA 顯示卡時放開滑鼠到出結果約 0.1～0.5 秒；AMD、Intel 顯示卡用 DirectML 版加速；沒有顯示卡也能用（CPU，慢很多）。
 - 直排小說、振假名、漫畫對話框都有特別處理。
 
 ## 下載就能用的版本
 
-到 [Releases](../../releases) 下載壓縮檔，解壓縮後雙擊 `jplens.exe`（不用裝 Python）。右下角系統匣出現紅色「字」圖示、跳出「就緒」通知就可以用了。
-Windows 10／11 64 位元。第一次開啟時 Windows SmartScreen 可能會警告（執行檔沒有簽章），按「其他資訊」→「仍要執行」。
+到 [Releases](../../releases) 看最新版的說明，壓縮檔放在 Release 裡連結的 Google Drive 資料夾（GitHub 放不下）。
+解壓縮後雙擊 `jplens.exe`（不用裝 Python；整個 `jplens` 資料夾都要留著）。右下角系統匣出現紅色「字」圖示、跳出「就緒」通知就可以用了。
+
+| 你的情況 | 下載 |
+| --- | --- |
+| 已經在用上一版 | **更新包**（例如 `jplens-v0.4.0-update-from-v0.3.0.zip`，43 MB），只適用檔名寫的那個舊版 |
+| 第一次安裝，有 NVIDIA 顯示卡 | **CUDA 版** `jplens-v版本-win64-cuda.zip`（約 2.5 GB），最快 |
+| 第一次安裝，AMD／Intel 顯示卡、沒有獨立顯示卡，或想要小一點的 | **DirectML 版** `jplens-v版本-win64-directml.zip`（約 1.1 GB） |
+
+- DirectML 版任何支援 DirectX 12 的顯示卡都能加速。同一張 RTX 4060 筆電上辨識約比 CUDA 版慢 2 倍，查一次字還是在半秒內，結果相同；
+  顯示卡比 CPU 還慢時（例如較舊的內顯）自動改用 CPU。設定 → 進階 看得到目前用哪個，設定 → 關於 顯示版本。
+- **更新**：從系統匣「結束」查字工具 → 把更新包或新版完整版解壓到**放 `jplens` 資料夾的那一層**，同名檔案選「取代」→ 照常開 `jplens.exe`。
+  設定、單字本、翻譯快取（`config.json`、`vocab\`、`cache\`、`captures\`）不在壓縮檔裡，不會被蓋掉；Gemini API Key 存在 Windows 認證管理員，不用重貼。
+  CUDA 版和 DirectML 版互換時請解壓到新資料夾，再把上面那幾個檔案、資料夾複製過去（有開「開機自動啟動」的話到設定裡關掉再打開一次）。
+- Windows 10／11 64 位元。第一次開啟時 Windows SmartScreen 可能會警告（執行檔沒有簽章），按「其他資訊」→「仍要執行」。
 
 ## 怎麼用
 
@@ -40,7 +53,12 @@ Windows 10／11 64 位元。第一次開啟時 Windows SmartScreen 可能會警�
 
 **系統匣選單**（「字」圖示，左鍵或右鍵；可能被收在工作列右下角的「^」裡）：
 - **單字本**：單字／文法／句子分開看；搜尋、篩選（級數、詞性、記錄時間、已學會、重點單字）、排序；
-  星號標**重點單字**、標記**已學會**、編輯、刪除（可以復原）。
+  星號標**重點單字**、標記**已學會**、編輯、刪除（可以復原）。上千個字也不卡（3,000 個字打開約 0.1 秒）。
+  - **單字測驗**（左側「練習 → 單字測驗」）：看單字選意思、看意思選單字或混合；可以只考重點單字、最近記的、某些級數。
+    四個選項只有一個對（同義的意思不會同時出現），錯的選項挑「看漢字猜不到」的；答錯可以按「這個也對」，結束後可以重測答錯的。
+  - **朗讀**：展開的單字卡片，讀音旁、「原句」旁各有一個喇叭，唸卡片上記錄的讀音（「辛い（からい）」不會唸成つらい）。
+    用 Windows 內建的日文語音：沒有的話到「設定 → 時間與語言 → 語音 → 新增語音」加入「日本語」（免費、不連網），裝好不用重開。
+  - **匯入**（單字 App 的備份、完整備份）、**完整備份**、**清空**（可以復原）、**手動新增單字**。
 - **匯出**：單字 → 單字 App 備份檔（重點單字會標成 App 的重點）；句子 → 編號的文字檔。匯出前可以選範圍。
 - **設定**：熱鍵（Alt／Ctrl＋Shift／Ctrl＋Alt）、預設選取方式、結果視窗的字級與寬度、單字本資料夾、開機自動啟動等，改了馬上生效。
 - **保存上一次查詢的畫面**：讀錯時存下來並填正確答案，當測試資料。
@@ -98,6 +116,8 @@ flowchart LR
 - **慣用說法整組查**：連續 2～6 個詞合起來查字典（「気になる」不會拆成「気」＋「なる」），處理活用與否定。
 - **讀音與詞義挑選**：依寫法、讀音、詞性挑字典條目；冷僻的意思排到後面；列出同寫法的其他常用讀音。
 - **531 條文法規則**：其中 303 條由 LLM 產生，經過自動驗證（正例都要比對到、反例都不能比對到、語料命中率不能過高、不能蓋掉現有規則）與人工抽查。
+- **單字測驗的答案唯一**：中文意思除了字串比對，再用 bge-small-zh（int8、24 MB、CPU）算語意相似度，太像的不會同時當選項；
+  錯的選項避開含答案漢字的（日文新字體先換成繁體字再比，例如「気」對「氣」）。
 
 ### 5. 評估
 
@@ -109,7 +129,9 @@ flowchart LR
 
 - Win32 低階滑鼠／鍵盤掛鉤、per-monitor DPI 座標換算。
 - 偵測以系統管理員身分執行的遊戲並提示，可一鍵以系統管理員身分重新啟動。
-- PyInstaller 打包（含 CUDA），附自我測試 `--selftest`。
+- 加速方式自動選：CUDA → DirectML（實測比 CPU 快才用，多顯示卡時選高效能的那張）→ CPU。
+- PyInstaller 打包成 CUDA 版、DirectML 版，附自我測試 `--selftest`；更新包只放和舊版不同的檔案（v0.3.0 → v0.4.0 只要 43 MB）。
+- 朗讀用 Windows 內建語音（Qt TextToSpeech：WinRT，不行再用 SAPI）。
 
 ## 搭配的單字 App：CharlieLearningV
 
@@ -151,6 +173,7 @@ repo 裡沒有模型和字典（太大），要先準備：
 
 有 NVIDIA 顯示卡時要找得到 CUDA 12＋cuDNN 9 的程式庫：放在 `data/cuda/`、pip 的 `nvidia-*` 套件，或裝了 PyTorch（cu12 版）時借用它的
 （`jplens/gpu.py`）。找不到會用 CPU。
+AMD／Intel 顯示卡：把 `onnxruntime-gpu` 換成 `onnxruntime-directml`（兩個不能裝在同一個環境，建議另建虛擬環境）。
 
 啟動：雙擊 `run_realtime_words_translate.bat`（不開主控台視窗），或要看訊息時：
 
@@ -162,11 +185,18 @@ python -m jplens
 
 ```bash
 pip install pyinstaller
-python packaging/build.py            # 帶 CUDA／cuDNN（約 3.5 GB）
-python packaging/build.py --no-cuda  # 不帶（沒有 CUDA 的電腦只能用 CPU）
+python packaging/build.py             # CUDA 版：帶 CUDA／cuDNN（約 3.8 GB）→ dist/jplens/
+python packaging/build.py --no-cuda   # 不帶（沒有 CUDA 的電腦只能用 CPU）
+python packaging/build.py --directml  # DirectML 版（約 1.6 GB）→ dist/directml/jplens/，要在裝 onnxruntime-directml 的環境執行
 ```
 
-輸出在 `dist/jplens/`，整個資料夾就是可以給別人的版本；打包完會自動跑 `jplens.exe --selftest` 確認模型、字典都帶進去了。
+整個輸出資料夾就是可以給別人的版本；打包完會自動跑 `jplens.exe --selftest` 確認模型、字典都帶進去了。
+加 `--zip` 會在自我測試通過後壓成 `dist/jplens-v版本-win64-cuda.zip`（或 `-directml.zip`）＋ `.sha256`，版本號在 `jplens/__init__.py`。
+
+```bash
+python packaging/make_update.py dist/jplens-v舊版-win64.zip dist/jplens   # 更新包：只放和舊版不同、新增的檔案
+python packaging/update_install.py C:\jplens                             # 把新打包的 dist/jplens 更新到自己在用的資料夾
+```
 
 ## 檔案
 
@@ -176,7 +206,7 @@ python packaging/build.py --no-cuda  # 不帶（沒有 CUDA 的電腦只能用 C
 | `vocab/saved_sentences.jsonl` | 記錄的原句 |
 | `config.json` | 設定（設定視窗會寫入） |
 | `logs/jplens.log` | 執行紀錄（每次查詢的時間、錯誤訊息） |
-| `jplens/` | 程式（`app.py` 主程式、`layout.py`／`inkcols.py` 版面、`recognize.py` 辨識、`words.py` 單字與文法、`manager.py` 單字本、`settings_ui.py` 設定、`listen.py`／`listen_ui.py` 無字幕模式） |
+| `jplens/` | 程式（`app.py` 主程式、`layout.py`／`inkcols.py` 版面、`recognize.py` 辨識、`words.py` 單字與文法、`manager.py` 單字本、`quiz.py`／`quiz_ui.py` 單字測驗、`speech.py` 朗讀、`gpu.py` 加速方式、`settings_ui.py` 設定、`listen.py`／`listen_ui.py` 無字幕模式） |
 | `tools/` | 建字典、匯出模型、文法規則與字典翻譯的批次工具 |
 | `tests/` | `python -c "import tests.test_core as m; [getattr(m,k)() for k in dir(m) if k.startswith('test_')]"`（需要字典）；`tests/eval/` 是辨識準確率的評估（需要自己的截圖） |
 
