@@ -26,6 +26,33 @@ from .jlearn import ocr, textutil
 Box = ocr.Box
 BATCH = 16
 log = logging.getLogger("jplens")
+# 從 manga-ocr 的 beam 候選裡挑「模型分數＋像不像日文」最好的（10-23）：模型會把罕用字讀成形狀相近的常用字
+# （沁みる → 沈みる：沈 0.88、沁 0.08），正確的寫法常常是第二、第三個候選。像不像日文看 Sudachi 斷詞的成本（越低越像）。
+# 只比和第一名一樣長的候選（換字）：字數不同時成本不能直接比（少一個字成本就低）。
+# 權重（斷詞成本 → 對數機率）：tools/ocr_rescore_eval.py（1,500 句維基詞典例句 × 6 種字型樣式）調參組最好的是 1e-4，
+# 字錯誤率 0.591% → 0.512%；驗證組 0.508% → 0.432%（變好 51 行、變差 13 行）。box_eval、保存的畫面不變。
+# 更大的權重（3e-4）能修好「沁みる」那張保存畫面，但合成圖變差的行多很多、另一張保存畫面反而讀錯，沒採用（10-23）。
+# 環境變數 JPLENS_LEX_WEIGHT 可以改（0＝不用，和以前一樣）。
+LEX_WEIGHT = float(os.environ.get("JPLENS_LEX_WEIGHT", 1e-4))
+
+
+def pick_candidate(cands: list[tuple[str, float]], weight: float | None = None) -> int:
+    """cands：[(文字, 對數機率總和)]，由好到壞（mangaocr_onnx.candidates）。回傳要用第幾個。"""
+    weight = LEX_WEIGHT if weight is None else weight
+    best, best_lp = cands[0]
+    if weight <= 0 or not best:
+        return 0
+    from .jlearn import analysis
+    tok = analysis._tokenizer()
+    base = tok.tokenize(best).get_internal_cost()
+    pick, gain = 0, 0.0
+    for i, (t, lp) in enumerate(cands[1:], 1):
+        if len(t) != len(best) or t == best:
+            continue
+        g = weight * (base - tok.tokenize(t).get_internal_cost()) - (best_lp - lp)
+        if g > gain:
+            pick, gain = i, g
+    return pick
 
 
 @dataclass
@@ -287,6 +314,8 @@ class Recognizer:
         self.engine = _make_engine()
         self._mo = self.engine._rec  # MangaOcrOnnx（預設）或 MangaOcr（PyTorch 版）
         self.onnx = isinstance(self._mo, mangaocr_onnx.MangaOcrOnnx)
+        if self.onnx:
+            self._mo.rescore = pick_candidate
         # PyTorch 版有顯示卡時 _load_manga_ocr 已直接載成半精度：video_translate 真實影片 40 幀、267 個區塊的結果
         # 和 fp32 完全相同，快約 30%
         self.det_device = self._det_to_gpu()

@@ -7,6 +7,7 @@
 2. Tomoshi 開放資料：JMdict 幾乎所有條目逐個意思的繁體中文（建字典時存進 entries.zh，tools/build_dict.py）
 3. 維基詞典（約 4 萬詞）
 4. 都沒有就顯示 JMdict 的英文（約 22 萬詞）
+解釋的語言選 English 時（lang.english()）只用 JMdict 的英文，上面的中文都不取。
 同一個寫法常有多個條目（「いい」：形容詞／「言う」的連用形／「飯」），依序挑：
 1. 寫法：先用顯示的寫法（漢字）查，查不到才用其他寫法；避免假名查到同音的別的詞（とき → 朱鷺）
 2. 讀音和 Sudachi 讀音相符（「辛い」からい／つらい）
@@ -20,6 +21,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import lang
 from .jlearn import analysis
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "dict.sqlite"
@@ -27,6 +29,8 @@ ZH_PATH = Path(__file__).resolve().parents[1] / "dict_translate" / "zh.jsonl"
 ZH_API_PATH = Path(__file__).resolve().parents[1] / "dict_translate" / "zh_api.jsonl"
 MAX_SENSES = 4
 MAX_ALSO = 2  # 「也讀」最多列幾個讀音
+PROVERB_MIN = 4  # 諺語、慣用句（Dictionary.proverbs）至少幾個字（急がば回れ：最後一個詞換回原形就對不上，要照字面比）
+_KANJI = re.compile(r"[㐀-鿿]")  # i18n: 不翻
 # 只當詞綴、量詞用的條目（辛い づらい、日 か、中 じゅう）不列在「也讀」
 _AFFIX_POS = ("suffix", "prefix", "counter")
 # 冷僻的詞義（JMdict 的 misc 標籤）：排到後面，結果視窗的清單只在沒有其他意思時才顯示（滑鼠提示照樣全列）。
@@ -226,6 +230,28 @@ class Dictionary:
                     found.add(key)
         return found
 
+    def proverbs(self) -> list[str]:
+        """諺語、慣用句的寫法（PROVERB_MIN 個字以上，排序好；words.find_proverbs 用前綴比對）：JMdict 標 proverb／idiom 的條目、
+        維基詞典詞性是諺語／慣用語的條目。只收含漢字的寫法（純假名的開頭太容易和一般句子撞在一起）。"""
+        cached = getattr(self, "_proverbs", None)
+        if cached is not None:
+            return cached
+        out = set()
+        if self.ok:
+            q = ("SELECT k.key, e.src, e.pos, e.sense_misc FROM keys k JOIN entries e ON e.id = k.entry_id "
+                 "WHERE length(k.key) >= ?")
+            for key, src, pos, misc in self._db().execute(q, (PROVERB_MIN,)):
+                if not _KANJI.search(key):
+                    continue
+                if src == "jmdict":
+                    flags = {m for s in (json.loads(misc) if misc else []) for m in s}
+                    if flags & {"proverb", "idiomatic expression"}:
+                        out.add(key)
+                elif any(p in pos for p in ("諺語", "谚语", "慣用語", "惯用语", "成語", "成语")):
+                    out.add(key)
+        self._proverbs = sorted(out)
+        return self._proverbs
+
     def has_reading(self, word: str, reading: str) -> bool:
         """字典裡有沒有這個寫法、這個讀音的條目（振假名的讀音提示要確認是真的詞，見 words._ruby_words）。"""
         if not self.ok or not word or not reading:
@@ -283,9 +309,12 @@ class Dictionary:
             rare = _rare_senses(senses, json.loads(mc) if mc else None)
             idx.sort(key=lambda i: i in rare)
             gemini = self._zh_seq.get(seq, [])
-            mean = [gemini[i] if i < len(gemini) and gemini[i] else zh[i] if i < len(zh) and zh[i] else senses[i]
-                    for i in idx[:2]]
-            out.append((common[0], "；".join(mean)))
+            if lang.english():
+                out.append((common[0], "; ".join(senses[i] for i in idx[:2])))
+            else:
+                mean = [gemini[i] if i < len(gemini) and gemini[i] else zh[i] if i < len(zh) and zh[i] else senses[i]
+                        for i in idx[:2]]
+                out.append((common[0], "；".join(mean)))
             if len(out) >= MAX_ALSO:
                 break
         return out
@@ -297,8 +326,10 @@ class Dictionary:
             cols = self._local.cols = {r[1] for r in self._db().execute("PRAGMA table_info(entries)")}
         return name in cols
 
-    def lookup(self, keys: list[str], reading: str = "", tiers: list[set[str]] | None = None) -> Meaning:
-        """keys：依優先順序的寫法；reading：平假名讀音；tiers：可接受的詞性類別（token_cats）。"""
+    def lookup(self, keys: list[str], reading: str = "", tiers: list[set[str]] | None = None,
+               zh: bool | None = None) -> Meaning:
+        """keys：依優先順序的寫法；reading：平假名讀音；tiers：可接受的詞性類別（token_cats）。
+        zh：要不要取中文意思；None＝跟著解釋的語言（English 時不取），True＝一定取（單字測驗判斷同義用）。"""
         m = Meaning()
         if not self.ok:
             return m
@@ -314,6 +345,10 @@ class Dictionary:
 
         self._gemini()
         (m.en, m.rare_en), gemini, tomoshi = self._pick_jmdict(by_key, reading, tiers, self._zh_seq)
+        if zh is None:
+            zh = not lang.english()
+        if not zh:  # 解釋用英文：只用 JMdict 的英文（維基詞典的條目只有中文）
+            return m
         if not gemini[0]:
             gemini = (next((self._zh_word[k] for k in keys if k in self._zh_word), [])[:MAX_SENSES], 0)
         if gemini[0] or tomoshi[0]:

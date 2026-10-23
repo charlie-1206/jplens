@@ -108,7 +108,7 @@ def torch_runner(model, dtype, device, num_beams):
             past = list(out[1:])
             return out[0].cpu().numpy()
 
-        return mo.beam_search(step, len(grays), num_beams)
+        return mo.beam_search(step, len(grays), num_beams)[0][:, 0]  # 每張圖最好的序列
 
     return run
 

@@ -6,6 +6,7 @@ LLM 只負責翻譯、中文解釋、例句與情境解說；API 不能用時，
 
 import csv
 import re
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -44,9 +45,21 @@ class Token:
 
 
 @lru_cache(maxsize=1)
-def _tokenizer():
+def _dictionary():
     from sudachipy import dictionary
-    return dictionary.Dictionary(dict="core").tokenizer()
+    return dictionary.Dictionary(dict="core")
+
+
+_local = threading.local()
+
+
+def _tokenizer():
+    """每個執行緒一個斷詞器（共用同一份字典，多一個只多一點記憶體；另外載一份字典要 74 MB）。
+    同一個斷詞器被兩個執行緒同時用會丟 SudachiError（查字的背景執行緒和無字幕模式的錄音執行緒都會斷詞）。"""
+    tok = getattr(_local, "tok", None)
+    if tok is None:
+        tok = _local.tok = _dictionary().create()
+    return tok
 
 
 def tokenize(text: str) -> list[Token]:
@@ -190,13 +203,14 @@ def _is_aux_use(tokens: list[Token], i: int) -> bool:
     return False
 
 
-def _candidate(tokens: list[Token], i: int, speakers: set[str]) -> bool:
+def _candidate(tokens: list[Token], i: int, speakers: set[str], pronouns: bool = False) -> bool:
+    """pronouns：代名詞也算（呼叫端自己再排除基本的，jplens/words.py）。"""
     t = tokens[i]
     p1 = t.pos1
     if not JP_CHAR.search(t.surface):
         return False  # 英文、數字、符號
     # 感嘆詞不列：えっ、うーん 沒有學習價值，而且查表會配錯（感嘆詞「ほう」配到「方」）
-    if p1 in ("助詞", "助動詞", "補助記号", "記号", "空白", "接頭辞", "接尾辞", "代名詞", "感動詞"):
+    if p1 in ("助詞", "助動詞", "補助記号", "記号", "空白", "接頭辞", "接尾辞", "感動詞") or (p1 == "代名詞" and not pronouns):
         return False
     if t.pos[1] == "数詞" or t.lemma in STOP_LEMMAS or t.norm in STOP_LEMMAS:
         return False

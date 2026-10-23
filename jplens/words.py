@@ -11,12 +11,19 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from . import lang
 from .dictionary import Dictionary, token_cats
+from .i18n import mark
 from .jlearn import analysis, grammar
 
 # 句尾：句號、問號、驚嘆號、右引號之後；後面緊接著右引號或其他句尾符號時不切（「…。」的」留在同一句）
 _SENT_END = re.compile(r"(?<=[。！？!?」』])(?![。！？!?」』）)])")
 GRAMMAR_POS = "文法"
+# 顯示時才翻的值（WordInfo.pos、jlpt 存的是中文；結果視窗、單字本顯示時 t(值)）：analysis.pos_label 的詞性名稱、
+# Sudachi 原本的詞性（pos_label 沒對照的）、慣用語、複合詞、文法、級數
+mark("五段動詞", "一段動詞", "サ變動詞", "カ變動詞", "動詞", "い形容詞", "な形容詞", "專有名詞", "名詞／な形容詞", "名詞（する動詞）",
+     "名詞", "副詞", "連體詞", "接續詞", "感嘆詞", "代名詞", "接頭辞", "接尾辞", "助詞", "助動詞", "形状詞", "連体詞",
+     "慣用語", "複合詞", "文法", "名詞（專有名詞？）", "級外")
 
 
 @dataclass
@@ -251,6 +258,49 @@ def find_expressions(tokens: list[analysis.Token], dictionary: Dictionary) -> li
     return out
 
 
+PROVERB_MAX = 20  # 諺語最多幾個詞
+_CONTENT = {"名詞", "動詞", "形容詞", "副詞", "形状詞", "代名詞"}
+
+
+def find_proverbs(tokens: list[analysis.Token], dictionary: Dictionary) -> list[tuple[int, int, str]]:
+    """長的諺語、慣用句 (起點, 終點, 字典寫法)：原文照字面和字典的寫法相同（不受 MAX_EXPR 限制），
+    或是只選到前半句（敵を知り己を知れば → 敵を知り己を知れば百戦危うからず）。前半句要同時符合：
+    在原文結尾或標點前結束（被選取範圍、引號截斷）、至少 5 個字而且是整句的一半以上、至少兩個實詞；
+    tools/proverb_eval.py 量誤配。由左而右，同一起點取最長的，不重疊。"""
+    import bisect
+    keys = dictionary.proverbs()
+    if not keys:
+        return []
+    starts = [0]
+    for t in tokens:
+        starts.append(starts[-1] + len(t.surface))
+    text = "".join(t.surface for t in tokens)
+    out, covered = [], 0
+    for i, t in enumerate(tokens):
+        if i < covered or t.pos1 not in _EXPR_START:
+            continue
+        best = None
+        for j in range(i + 2, min(len(tokens), i + PROVERB_MAX) + 1):
+            if tokens[j - 1].is_punct():
+                break
+            span = text[starts[i]:starts[j]]
+            k = bisect.bisect_left(keys, span)
+            if k == len(keys) or not keys[k].startswith(span):
+                break  # 再長也不會是任何一條的開頭
+            if keys[k] == span:
+                best = (j, span)
+                continue
+            cut = j == len(tokens) or tokens[j].is_punct()
+            content = sum(tokens[m].pos1 in _CONTENT for m in range(i, j))
+            full = min((key for key in keys[k:k + 50] if key.startswith(span)), key=len)
+            if cut and content >= 2 and len(span) >= max(5, len(full) / 2):
+                best = (j, full)
+        if best:
+            out.append((i, best[0], best[1]))
+            covered = best[0]
+    return out
+
+
 # ---------------------------------------------------------------- 擷取
 
 def _sentence_at(text: str, pos: int) -> str:
@@ -301,15 +351,35 @@ def _grammar_notes() -> dict:
         return {}
 
 
+@lru_cache(maxsize=1)
+def _grammar_en() -> dict:
+    """文法說明的英文版 {"rules": {規則編號: {meaning, formation[, pattern]}}, "jlpt": {key: {meaning, formation, example[, pattern]}}}
+    （tools/grammar_en_batches.py 產生；還沒翻好的條目沒有，照舊顯示中文）。"""
+    import json
+    from pathlib import Path
+    path = Path(grammar.__file__).with_name("grammar_en.json")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def _grammar_info(rule, sentence: str) -> WordInfo:
-    return WordInfo(word=rule.pattern, reading="", pos=GRAMMAR_POS, level=rule.level, proper=False,
-                    sentence=sentence, zh=[rule.meaning], formation=rule.formation,
-                    notes=_grammar_notes().get(rule.id, []))
+    notes = _grammar_notes().get(rule.id, [])
+    en = _grammar_en().get("rules", {}).get(rule.id) if lang.english() else None
+    if en is None:
+        return WordInfo(word=rule.pattern, reading="", pos=GRAMMAR_POS, level=rule.level, proper=False,
+                        sentence=sentence, zh=[rule.meaning], formation=rule.formation, notes=notes)
+    jlpt = _grammar_en().get("jlpt", {})
+    notes = [n | jlpt[n["key"]] if n.get("key") in jlpt else n for n in notes]
+    return WordInfo(word=en.get("pattern", rule.pattern), reading="", pos=GRAMMAR_POS, level=rule.level, proper=False,
+                    sentence=sentence, en=[en["meaning"]], formation=en["formation"], notes=notes)
 
 
 # ---------------------------------------------------------------- 振假名（ruby.py 讀出來的讀音提示）
 
 RUBY_NOTE = "（字典沒有這個詞；讀音是書上標的振假名）"
+RUBY_NOTE_EN = "(not in the dictionary; the reading is the furigana printed in the text)"
 _KANA_TAIL = re.compile(r"^[ぁ-ゟ]*$")
 
 
@@ -364,7 +434,8 @@ def _ruby_words(tokens: list[analysis.Token], text: str, ruby: list[tuple[str, s
                                 also=dictionary.other_readings(word, reading))
             else:
                 info = WordInfo(word=word, reading=reading, pos="名詞（專有名詞？）", level=None, proper=True,
-                                sentence=sentence, zh=[RUBY_NOTE])
+                                sentence=sentence,
+                                **({"en": [RUBY_NOTE_EN]} if lang.english() else {"zh": [RUBY_NOTE]}))
             out[i] = (j, info)
             used.update(range(i, j))
     return out
@@ -431,9 +502,12 @@ def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]
             head = grammar.rule_compound_head(rule, tokens[start]) if end - start == 1 else None
             if head:
                 heads[start] = head  # 複合詞（練り直す、読み方）本身照樣列，另外列前半的動詞（練る）
-            elif end - start > 1 or tokens[start].pos1 in ("名詞", "動詞", "形容詞"):
+            elif end - start > 1 or (tokens[start].pos1 in ("名詞", "動詞", "形容詞")
+                                     and not grammar.rule_form_only(rule, tokens[start])):  # 命令形 的 突っ走れ 照樣列
                 in_grammar.update(range(start, end))  # 已屬於文法句型的詞（にとって 的「取る」）不列
         exprs = {i: (j, form) for i, j, form in find_expressions(tokens, dictionary)}
+        # 諺語另外列一條，組成的詞照常列（敵、己 也是要學的字）
+        provs = {i: form for i, _, form in find_proverbs(tokens, dictionary)}
         # 組成慣用說法的詞單獨列出時意思常會誤導（ため息をつく 的 つく ≠ 到達、気になる 的 気），不另外列；
         # 只保留慣用語裡兩個字以上的名詞（ため息、仕方）。複合詞（ボードゲーム）的組成部分都不列。
         in_expr = set()
@@ -451,6 +525,9 @@ def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]
                 if (info.word, info.reading) not in seen:
                     seen.add((info.word, info.reading))
                     out.append(info)
+            if i in provs and provs[i] not in seen:
+                seen.add(provs[i])
+                out.append(_expression(provs[i], text, pos_in_text, dictionary, False))
             if i in in_ruby:
                 continue
             if i in exprs:
@@ -461,11 +538,19 @@ def extract(texts: list[str], dictionary: Dictionary, ruby: list[tuple[str, str]
                     out.append(_expression(form, text, pos_in_text, dictionary, compound))
             if i in in_grammar or i in in_expr:
                 continue
+            info = None
             if not analysis._candidate(tokens, i, set()):
-                if t.pos1 in _FALLBACK_POS and not t.is_punct():
-                    skipped.append((t, text, pos_in_text))
-                continue
-            key, info = _word_info(t, text, pos_in_text, dictionary)
+                # 代名詞平常略過是因為太基本（これ、私、彼）：日檢 N5、N4 以外的（己、汝、貴様、俺、お前）照樣列
+                if t.pos1 == "代名詞" and analysis._candidate(tokens, i, set(), pronouns=True):
+                    entry = lookup_jlpt(t, _norm(t, dictionary), dictionary)
+                    if entry is None or entry.level <= 3:
+                        key, info = _word_info(t, text, pos_in_text, dictionary)
+                if info is None:
+                    if t.pos1 in _FALLBACK_POS and not t.is_punct():
+                        skipped.append((t, text, pos_in_text))
+                    continue
+            if info is None:
+                key, info = _word_info(t, text, pos_in_text, dictionary)
             if i in heads and not (info.zh or info.en or info.jlpt_en):
                 pass  # 字典沒收的複合詞（塗り直す）不列，只列前半的動詞
             elif key not in seen:  # 同寫法不同讀音（辛い：からい／つらい）是不同的字，都列

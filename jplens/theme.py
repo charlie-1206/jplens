@@ -18,7 +18,7 @@ C = {
     "btn": "#3a3f4b", "btn_hover": "#4a5160", "btn_bd": "#555b66",
 }
 LEVEL_BG = {"N5": "#4f7a4f", "N4": "#3d7071", "N3": "#46699c", "N2": "#7a5296", "N1": "#a3463f",
-            "級外": "#61656e", "專有名詞": "#7d6430", "文法": "#61656e"}
+            "級外": "#61656e", "專有名詞": "#7d6430", "文法": "#61656e"}  # i18n: 不翻
 JP_FONTS = '"Yu Gothic UI", "Meiryo UI", "Meiryo", "MS UI Gothic"'
 
 # 線條圖示（viewBox 0 0 20 20，stroke＝currentColor 由 icon() 換成指定顏色）

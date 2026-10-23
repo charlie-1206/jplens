@@ -7,7 +7,7 @@
     加 --zip：自我測試通過後壓成 dist/jplens-v版本-win64-cuda.zip（或 -directml.zip）＋ .sha256（版本是 jplens.__version__）
 
 需要 pip install pyinstaller。步驟：畫圖示 → PyInstaller（packaging/jplens.spec）→ 複製 CUDA DLL 到 _internal/data/cuda/
-→ 放 NOTICE.md、LICENSE、使用說明 → 跑 jplens.exe --selftest 確認模型、字典、斷詞都帶進去 → 清掉自我測試留下的 logs/。
+→ 放 NOTICE.md、LICENSE、使用說明（中文 使用說明.txt、英文 README.txt）→ 跑 jplens.exe --selftest 確認模型、字典、斷詞都帶進去 → 清掉自我測試留下的 logs/。
 使用者的資料（config.json、vocab/、logs/、captures/）會建在 jplens.exe 旁邊，所以重新打包前先把舊的 dist/jplens 裡的資料備份。
 """
 
@@ -31,6 +31,7 @@ README = """螢幕查字（jplens）
 
 啟動：雙擊 jplens.exe，右下角系統匣出現「字」圖示，等「就緒」的通知後，按住 Alt 用滑鼠選取畫面上的日文。
 - 單字本、設定、匯出：在系統匣圖示上按右鍵。
+- 意思和介面可以選繁體中文或英文：設定 → 一般 →「解釋的語言」「介面語言」（預設跟著 Windows 的顯示語言；介面語言要重開才換）。
 - 遊戲（絕區零、鳴潮、星塔旅人等）以系統管理員身分執行時，查字工具也要用系統管理員身分：
   系統匣選「以系統管理員身分重新啟動」，或在設定 → 一般打開「以系統管理員身分執行」。
 {gpu}
@@ -54,6 +55,44 @@ GPU_TEXT = {
             "  設定 → 進階看得到目前用哪個。",
     "directml": "- 這是 DirectML 版：NVIDIA、AMD、Intel 顯示卡都能用（DirectML）；顯示卡比 CPU 還慢（例如較舊的內顯）時自動改用 CPU。\n"
                 "  有 NVIDIA 顯示卡的話 CUDA 版比較快（辨識約快 2 倍）。設定 → 進階看得到目前用哪個。",
+}
+# 英文版（README.txt）：內容和上面相同
+README_EN = """jplens - look up Japanese anywhere on your screen
+
+Start: double-click jplens.exe. When the 「字」 icon appears in the system tray (bottom-right) and the "Ready" notification
+pops up, hold Alt and drag over Japanese text on screen.
+- Vocabulary, settings, export: right-click the tray icon.
+- Meanings and the interface can be English or Traditional Chinese: Settings -> General -> Explanation language /
+  Interface language (by default they follow your Windows display language; the interface language applies after a restart).
+- If a game (e.g. Zenless Zone Zero, Wuthering Waves) runs as administrator, jplens must too:
+  choose "Restart as administrator" in the tray menu, or turn on "Run as administrator" in Settings -> General.
+{gpu}
+- Listen mode (live streams, anime without subtitles): Alt+L turns it on and off and transcribes the audio your PC is playing.
+  If you watch at a higher playback speed, choose the same speed at the top right of its window.
+- Sentence translation and explanations need your own Gemini API key: Settings -> Translation & AI.
+  Everything else works without one.
+
+All your data is in this folder: config.json (settings), vocab\\ (saved words and sentences), cache\\ (translated sentences),
+captures\\ (saved screenshots and audio), logs\\ (log files).
+To update, first quit jplens from the tray, then either:
+- Overwrite (easiest): unzip the new version into the folder that contains the jplens folder and choose "Replace" for
+  files with the same name. Your data (config.json, vocab\\, cache\\, captures\\) is not in the zip and won't be overwritten.
+  When a release comes with an update package, you only need to download that; the steps are the same.
+- New folder: unzip the new version somewhere else -> copy config.json, vocab\\ and cache\\ (and captures\\ if you use it)
+  from the old folder -> check that your vocabulary is all there before deleting the old folder. If "Start automatically at login" is on,
+  turn it off and on again in Settings -> General (it remembers the old location).
+Use "New folder" when switching between the CUDA and DirectML builds (their libraries differ; overwriting leaves unused files).
+Your Gemini API key is stored in Windows Credential Manager, so you don't need to paste it again.
+
+License: code under Apache-2.0 (LICENSE); sources and licenses of the dictionaries and models are in NOTICE.md; bundled
+third-party libraries (Qt, {lib}, etc.) are listed in the licenses\\ folder.
+"""
+GPU_TEXT_EN = {
+    "cuda": "- This is the CUDA build: it uses an NVIDIA GPU if you have one (fast), otherwise the CPU (much slower).\n"
+            "  Without an NVIDIA GPU, download the DirectML build instead. Settings -> Advanced shows what is in use.",
+    "directml": "- This is the DirectML build: it accelerates on NVIDIA, AMD and Intel GPUs, and switches to the CPU when the GPU is\n"
+                "  slower (e.g. older integrated graphics). With an NVIDIA GPU the CUDA build is faster (about 2x for recognition).\n"
+                "  Settings -> Advanced shows what is in use.",
 }
 
 
@@ -114,8 +153,9 @@ def main():
         if (ort_dir / n).exists():
             shutil.copy2(ort_dir / n, lic / f"onnxruntime-{n}" if n.endswith(".txt") else lic / "onnxruntime-LICENSE.txt")
     flavor = "directml" if DIRECTML else "cuda"
-    readme = README.format(gpu=GPU_TEXT[flavor], lib="Microsoft DirectML" if DIRECTML else "NVIDIA CUDA")
-    (DIST / "使用說明.txt").write_text(readme, encoding="utf-8-sig")
+    lib = "Microsoft DirectML" if DIRECTML else "NVIDIA CUDA"
+    (DIST / "使用說明.txt").write_text(README.format(gpu=GPU_TEXT[flavor], lib=lib), encoding="utf-8-sig")
+    (DIST / "README.txt").write_text(README_EN.format(gpu=GPU_TEXT_EN[flavor], lib=lib), encoding="utf-8-sig")
 
     print("自我測試（jplens.exe --selftest）…")
     r = subprocess.run([str(DIST / "jplens.exe"), "--selftest"], timeout=300)

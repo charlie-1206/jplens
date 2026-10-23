@@ -10,8 +10,10 @@ import logging
 from PySide6.QtCore import QLocale
 from PySide6.QtTextToSpeech import QTextToSpeech, QVoice  # noqa: F401（模組層 import：PyInstaller 才會帶 Qt 的語音外掛）
 
+from .i18n import t
+
 log = logging.getLogger("jplens")
-INSTALL_HINT = "這台電腦沒有日文語音：到 Windows「設定 → 時間與語言 → 語音 → 新增語音」加入「日本語」，裝好後再按一次"
+INSTALL_HINT = t("這台電腦沒有日文語音：到 Windows「設定 → 時間與語言 → 語音 → 新增語音」加入「日本語」，裝好後再按一次")
 ENGINES = ("winrt", "sapi")
 
 _tts: QTextToSpeech | None = None

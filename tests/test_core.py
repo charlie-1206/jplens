@@ -99,6 +99,37 @@ def test_empty_list_falls_back_to_basic_words():
     assert "する" not in [w.word for w in extract(["勉強をする"], Dictionary())]
 
 
+def test_uncommon_pronouns_listed():
+    # 代名詞只略過日檢 N5、N4 的（彼、これ）；己、貴様 這類照樣列（10-23：敵を知り己を知れば 的 己 沒列出）
+    words = [w.word for w in extract(["敵を知り己を知れば"], Dictionary())]
+    assert "己" in words and "敵" in words
+    words = [w.word for w in extract(["彼はこれを貴様に渡した"], Dictionary())]
+    assert "貴様" in words and "彼" not in words and "これ" not in words
+
+
+def test_form_only_grammar_keeps_word():
+    # 命令形、意向形只看活用形：動詞本身照樣列（10-23：突っ走れ 只出現「命令形」）；〜なさい、〜はじめる 的詞屬於句型，不列
+    d = Dictionary()
+    assert [w.word for w in extract(["突っ走れ"], d)] == ["突っ走る", "命令形"]
+    assert "帰る" in [w.word for w in extract(["そろそろ帰ろう"], d)]
+    assert "なさる" not in [w.word for w in extract(["早く寝なさい。"], d)]
+    assert "始める" not in [w.word for w in extract(["雨が降り始めた"], d)]
+
+
+def test_proverbs():
+    # 長諺語：完整的（超過 MAX_EXPR 個詞）、只選到前半句的都配得到；組成的詞照樣列
+    d = Dictionary()
+    full = "敵を知り己を知れば百戦危うからず"
+    for text in (full, "敵を知り己を知れば", "敵を知り己を知れば、"):
+        words = [w.word for w in extract([text], d)]
+        assert words[0] == full and "己" in words and "敵" in words, words
+    assert [w.word for w in extract(["急がば回れ"], d)][0] == "急がば回れ"  # 命令形結尾：照字面比
+    # 前半句後面還接著別的話、太短、實詞不夠：不配
+    assert not any(w.word == full for w in extract(["敵を知り己を知ればよいのだ"], d))
+    assert not any(w.word.startswith("石の上にも") for w in extract(["石の上に座った"], d))
+    assert not any(w.word.startswith("石の上にも") for w in extract(["石の上に"], d))
+
+
 def test_other_readings():
     d = Dictionary()
     if not d._has_column("common"):
@@ -403,8 +434,52 @@ def test_quiz_unique_options():
     # 意思片段：結尾的「的／地」去掉一個、至少留兩個字（目的、墓地 不能變成 目、墓）
     assert quiz.glosses({"meaning_zh": ["目的；墓地", "迷人的、唐突地", "漫無目的地", "地位較低者"]}) == \
         ["目的", "墓地", "迷人", "唐突", "漫無目的", "地位較低者"]
+    # 英文說法以詞為單位比、詞尾變化算同一個；只有空泛的詞（to do）不算包含
+    ov = quiz._strings_overlap
+    assert ov(["faintly"], ["faint"]) and ov(["to burst"], ["to burst open"]) and ov(["to eat"], ["eat"])
+    assert not ov(["pop"], ["population"]) and not ov(["to do"], ["to do over and over again"])
+    assert ov(["開端"], ["開端與結尾"]) and not ov(["端"], ["開端"])  # 中文照舊：2 個字以上才算包含
+    # 解釋的語言是 English：語意模型改比中文意思（zh_of），英文說法不同也抓得到
+    from jplens import lang
+    lang.set_explain("en")
+    try:
+        en = [{"word": "即座", "reading": "そくざ", "meaning_en": ["on the spot; then and there"]},
+              {"word": "早急", "reading": "さっきゅう", "meaning_en": ["prompt; urgent"]},
+              {"word": "窓", "reading": "まど", "meaning_en": ["window"]}]
+        zh = {"即座": ["即刻、當場"], "早急": ["即時、迅速"], "窓": ["窗戶"]}
+        with tempfile.TemporaryDirectory() as d:
+            sem = quiz.Semantic(cache=Path(d) / "vec.npz")
+            qm = quiz.QuizMaker(en, key_of, sem if sem.ok else None, None, zh_of=lambda r: zh[r["word"]])
+            assert quiz.shown(en[0]) == "on the spot; then and there"
+            if sem.ok:
+                assert qm.same_meaning(en[0], en[1])
+            assert not qm.same_meaning(en[0], en[2])
+    finally:
+        lang.set_explain("zh-TW")
     # 日文新字體和繁體中文比得起來（色気 的 気 ／ 香氣）
     assert quiz.kanji("色気") & quiz.kanji("香氣、芳香") and quiz.kanji("発表") & quiz.kanji("發表")
+
+
+def test_config_default_lang():
+    """語言預設看 Windows 的顯示語言；改預設以前就在用的人（設定檔沒寫語言）照舊中文；不認得的值換成預設。"""
+    from jplens import config
+    old = config.CONFIG_PATH, config.NEW_USER
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            config.CONFIG_PATH = Path(d) / "config.json"
+            config.NEW_USER = True
+            c = config.Config.load()
+            sys_lang = config.system_lang()
+            assert sys_lang in config.LANGS and (c.explain_lang, c.ui_lang) == (sys_lang, sys_lang)
+            config.NEW_USER = False
+            assert config.Config.load().ui_lang == "zh-TW"
+            config.CONFIG_PATH.write_text('{"hotkey": "alt"}', encoding="utf-8")
+            assert config.Config.load().explain_lang == "zh-TW"
+            config.CONFIG_PATH.write_text('{"ui_lang": "en", "explain_lang": "xx"}', encoding="utf-8")
+            c = config.Config.load()
+            assert (c.explain_lang, c.ui_lang) == (sys_lang, "en")
+        finally:
+            config.CONFIG_PATH, config.NEW_USER = old
 
 
 def test_sentence_record():

@@ -2,7 +2,7 @@
 
 import json
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)  # PyInstaller 打包的執行檔（packaging/build.py）
@@ -11,6 +11,19 @@ FROZEN = getattr(sys, "frozen", False)  # PyInstaller 打包的執行檔（packa
 APP_DIR = Path(__file__).resolve().parents[1]
 ROOT = Path(sys.executable).resolve().parent if FROZEN else APP_DIR
 CONFIG_PATH = ROOT / "config.json"
+# 第一次使用：還沒有設定檔、也沒啟動過（logs/ 是啟動時建的；打包時自我測試留下的 logs/ 會清掉）。
+# 要在 import 時判斷：app.main() 會先建 logs/ 才讀設定。App 啟動時把設定存下來，之後就看設定檔
+NEW_USER = not CONFIG_PATH.exists() and not (ROOT / "logs").exists()
+LANGS = ("zh-TW", "en")
+
+
+def system_lang() -> str:
+    """Windows 的顯示語言：中文（繁體、簡體都算，介面只有繁體）→ zh-TW，其他 → en。"""
+    try:
+        import ctypes
+        return "zh-TW" if ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x04 else "en"  # LANG_CHINESE
+    except Exception:  # noqa: BLE001（不是 Windows）
+        return "en"
 
 # 框選時要按住的鍵（Windows 虛擬鍵碼）；全部按住時拖曳滑鼠左鍵才會框選
 HOTKEYS = {
@@ -56,10 +69,11 @@ class Config:
     listen_partial: bool = True  # 邊講邊顯示（講話中每 0.8 秒重新辨識一次，CPU 約多用單核 10%）
     listen_pos: list = None
     listen_speed: float = 1.0  # 影片的播放速度（倍速）：辨識前放慢回原速（listen.SPEEDS）
-    # 預留（還沒實作）：辨識的語言（要學的語言）、解釋的語言、介面語言
-    src_lang: str = "ja"
-    explain_lang: str = "zh-TW"
-    ui_lang: str = "zh-TW"
+    src_lang: str = "ja"  # 辨識的語言（要學的語言）：預留，只有日文
+    # 解釋的語言（lang.py）、介面語言（i18n.py）：預設看 Windows 的顯示語言，中文 → 繁體中文，其他 → 英文（使用者 10-23）；
+    # 改預設以前就在用的人照舊中文（load()）
+    explain_lang: str = field(default_factory=system_lang)
+    ui_lang: str = field(default_factory=system_lang)
 
     @classmethod
     def load(cls) -> "Config":
@@ -69,6 +83,11 @@ class Config:
             data = {}
         names = {f.name for f in fields(cls)}
         cfg = cls(**{k: v for k, v in data.items() if k in names})
+        for k in ("explain_lang", "ui_lang"):
+            if k not in data and not NEW_USER:  # 預設改看 Windows 語言（10-23）以前就在用、設定檔沒寫語言（沒改過設定）的人：照舊中文
+                setattr(cfg, k, "zh-TW")
+            if getattr(cfg, k) not in LANGS:
+                setattr(cfg, k, system_lang())
         if cfg.hotkey not in HOTKEYS:
             cfg.hotkey = "alt"
         if cfg.select_mode not in ("text", "box", "manga"):

@@ -24,9 +24,13 @@ dict_translate/api_stop
 data/models/
 # 可重新產生的文法批次檔與匯入報告（tools/grammar_batches.py；成果在 grammar_gen/results/ 與 jplens/jlearn/grammar_rules_extra.jsonl，要進版控）
 grammar_gen/batches/
+grammar_gen/en_batches/
 grammar_gen/report.txt
 
 # 打包（packaging/build.py）的中間檔與成品
 build/
 dist/
 cache/
+
+# 介面英文化的工作檔（tools/i18n_check.py collect、tools/shot_ui.py；成果在 jplens/i18n_en.json）
+i18n_work/

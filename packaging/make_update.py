@@ -32,6 +32,10 @@ def main(old_zip: str, new_dir: str):
     from jplens import __version__
     old_zip, new_dir = Path(old_zip), Path(new_dir)
     old_ver = re.search(r"v(\d+\.\d+\.\d+)", old_zip.name).group(1)
+    # v0.4.0 起有 CUDA、DirectML 兩種：更新包分開做，檔名、說明標出適用哪一種（v0.3.0 以前只有 CUDA 版，檔名沒標）
+    m = re.search(r"-(cuda|directml)\.zip$", old_zip.name)
+    flavor = m.group(1) if m else "cuda"
+    flavor_name = {"cuda": "CUDA", "directml": "DirectML"}[flavor]
     top = new_dir.name  # jplens
     with zipfile.ZipFile(old_zip) as z:
         old = {i.filename[len(top) + 1:]: (i.file_size, i.CRC) for i in z.infolist()
@@ -44,18 +48,25 @@ def main(old_zip: str, new_dir: str):
         elif old[rel] != (f.stat().st_size, crc32(f)):
             changed.append(rel)
     removed = sorted(set(old) - set(new))
-    out = new_dir.parent / f"jplens-v{__version__}-update-from-v{old_ver}.zip"
+    out = new_dir.parent / (f"jplens-v{__version__}-update-from-v{old_ver}" + (f"-{flavor}.zip" if m else ".zip"))
     bat = "@echo off\r\nchcp 65001 >nul\r\ncd /d \"%~dp0\"\r\n" + "".join(
         f"if exist \"{r.replace('/', chr(92))}\" del /q \"{r.replace('/', chr(92))}\"\r\n" for r in removed) + \
         f"echo 已刪除 v{old_ver} 用到、v{__version__} 不再用的 {len(removed)} 個檔案。\r\npause\r\n"
-    note = (f"jplens v{old_ver} → v{__version__} 更新包（只適用 v{old_ver} 的 CUDA 版，也就是 v{old_ver} 唯一的版本）\r\n\r\n"
+    only = f"只適用 v{old_ver} 的 {flavor_name} 版" if m else f"只適用 v{old_ver} 的 CUDA 版，也就是 v{old_ver} 唯一的版本"
+    note = (f"jplens v{old_ver} → v{__version__} 更新包（{only}）\r\n\r\n"
             "1. 在系統匣的「字」圖示按右鍵 → 結束。\r\n"
             "2. 把這個壓縮檔解壓到「放 jplens 資料夾的那一層」（裡面是 jplens\\…），遇到同名檔案選「取代」。\r\n"
             "   你的設定、單字本、翻譯快取（config.json、vocab\\、cache\\、captures\\）不在更新包裡，不會被蓋掉。\r\n"
             + (f"3. 執行 jplens\\刪除舊檔案.bat（刪掉新版不再用的 {len(removed)} 個檔案），然後照常開 jplens.exe。\r\n\r\n"
                if removed else "3. 照常開 jplens.exe。\r\n\r\n")
             + f"內容：更新 {len(changed)} 個檔案、新增 {len(added)} 個、刪除 {len(removed)} 個。\r\n\r\n"
-            + ("新版不再用的檔案：\r\n" + "".join(f"  {r}\r\n" for r in removed) if removed else ""))
+            + ("新版不再用的檔案：\r\n" + "".join(f"  {r}\r\n" for r in removed) if removed else "")
+            + f"\r\n----\r\njplens v{old_ver} -> v{__version__} update package (only for the v{old_ver} {flavor_name} build)\r\n\r\n"
+            "1. Right-click the 「字」 icon in the system tray -> Quit.\r\n"
+            "2. Unzip this file into the folder that contains the jplens folder (it holds jplens\\...) and choose \"Replace\".\r\n"
+            "   Your settings, vocabulary and translation cache (config.json, vocab\\, cache\\, captures\\) are not in it.\r\n"
+            + (f"3. Run jplens\\刪除舊檔案.bat (deletes {len(removed)} files the new version no longer uses), then start jplens.exe.\r\n"
+               if removed else "3. Start jplens.exe as usual.\r\n"))
     size = 0
     tmp = out.with_suffix(".zip.tmp")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:

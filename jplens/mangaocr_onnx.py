@@ -25,6 +25,7 @@ MODEL_DIR = Path(__file__).resolve().parents[1] / "data" / "models" / "manga-ocr
 START, EOS = 2, 3
 N_SPECIAL = 5  # [PAD] [UNK] [CLS] [SEP] [MASK]：解碼時略過（同 skip_special_tokens）
 LAYERS = 2
+LENGTH_PENALTY = 2.0  # manga-ocr 的 config.json
 NGRAM = 6  # 不重複 n-gram：manga-ocr 原本是 3，會讀不出「ちょくちょく」「ハハハハ」這類重複（第二個「ちょく」被禁止，只好改讀成「ぢょく」）
 
 
@@ -37,7 +38,7 @@ def post_process(text: str) -> str:
     import jaconv
     text = "".join(text.split())
     text = text.replace("…", "...")
-    text = re.sub("[・.]{2,}", lambda x: (x.end() - x.start()) * ".", text)
+    text = re.sub("[・.]{2,}", lambda x: (x.end() - x.start()) * ".", text)  # i18n: 不翻
     return jaconv.h2z(text, ascii=True, digit=True)
 
 
@@ -65,10 +66,12 @@ def _take(a, idx):
     return np.take_along_axis(a, idx.reshape(idx.shape + (1,) * (a.ndim - 2)), 1)
 
 
-def beam_search(step, batch: int, num_beams=4, max_length=300, length_penalty=2.0, ngram=3) -> np.ndarray:
+def beam_search(step, batch: int, num_beams=4, max_length=300, length_penalty=2.0,
+                ngram=3) -> tuple[np.ndarray, np.ndarray]:
     """step(tokens (N,), src (N,), cur) → 下一個字的 logits (N, V)。N = batch×num_beams；
     src[i]＝第 i 列要接續上一步第幾列的 K/V 快取；cur＝這一步餵進去的字的位置（從 0 開始）。
-    回傳每張圖最好的序列 (batch, max_length)，未用到的位置是 EOS。"""
+    回傳 (序列 (batch, num_beams, max_length), 分數 (batch, num_beams))：每張圖完成的序列由好到壞（[:, 0] 就是
+    transformers generate() 的結果），未用到的位置是 EOS；分數＝對數機率總和 ÷ 長度^length_penalty，沒完成的是 -1e9。"""
     B, K = batch, num_beams
     keep = 2 * K  # transformers：max(2, 1 + eos 數) × num_beams
     cur, prompt = 1, 1
@@ -124,7 +127,7 @@ def beam_search(step, batch: int, num_beams=4, max_length=300, length_penalty=2.
         unsat = unsat & np.any(best_run > worst_fin, axis=-1, keepdims=True)
         if not (unsat.any() and not finished.all() and not hits.all()):
             break
-    return seqs[:, 0]
+    return seqs, beam_scores
 
 
 class MangaOcrOnnx:
@@ -146,12 +149,19 @@ class MangaOcrOnnx:
         self.device = {"CUDAExecutionProvider": "cuda", "DmlExecutionProvider": "dml"}.get(p, "cpu")
         self.vocab = (model_dir / "vocab.txt").read_text(encoding="utf-8").splitlines()
         self._ort = ort
+        self.rescore = None  # 候選 [(文字, 對數機率總和)] → 選第幾個（None＝第一個）
 
     def _decode(self, ids) -> str:
         toks = [self.vocab[i] for i in ids if i >= N_SPECIAL]
         return post_process(" ".join(toks).replace(" ##", "").strip())
 
     def __call__(self, grays: list[np.ndarray]) -> list[str]:
+        """每張圖的文字：beam search 最好的候選；有 rescore（recognize.pick_candidate）時由它從候選裡挑。"""
+        return [c[self.rescore(c)][0] if self.rescore is not None and len(c) > 1 else c[0][0]
+                for c in self.candidates(grays)]
+
+    def candidates(self, grays: list[np.ndarray]) -> list[list[tuple[str, float]]]:
+        """每張圖 beam search 完成的候選，由好到壞：[(文字, 對數機率總和)]。"""
         if not grays:
             return []
         ort, dev, dt = self._ort, self.device, self.dtype
@@ -185,5 +195,14 @@ class MangaOcrOnnx:
             past = dict(zip(past, outs[1:]))
             return outs[0].numpy()
 
-        seqs = beam_search(step, len(grays), self.num_beams, ngram=self.ngram)
-        return [self._decode(s.tolist()) for s in seqs]
+        seqs, scores = beam_search(step, len(grays), self.num_beams, length_penalty=LENGTH_PENALTY,
+                                   ngram=self.ngram)
+        out = []
+        for ss, sc in zip(seqs, scores):
+            c = []
+            for s, v in zip(ss.tolist(), sc.tolist()):
+                if v > -1e8:
+                    n = s.index(EOS, 1) if EOS in s[1:] else len(s) - 1  # 產生的字數（含 EOS）
+                    c.append((self._decode(s), v * n ** LENGTH_PENALTY))
+            out.append(c or [(self._decode(ss[0].tolist()), 0.0)])
+        return out

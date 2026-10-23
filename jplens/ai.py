@@ -17,6 +17,7 @@ import unicodedata
 from PySide6.QtCore import QObject, Signal
 
 from .config import ROOT
+from .i18n import t
 
 log = logging.getLogger("jplens")
 
@@ -27,27 +28,48 @@ KEYS = {  # 種類 → (認證管理員裡的名稱, 備援的環境變數)
 }
 TRANSLATE_MODEL = "gemini-3.5-flash-lite"
 EXPLAIN_MODELS = {  # 模型 ID → 設定視窗顯示的名稱
-    "gemini-3.8-flash": "Gemini 3.8 Flash（講解較好，免費額度較少）",
-    "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite（較快，免費額度較多）",
+    "gemini-3.8-flash": t("Gemini 3.8 Flash（講解較好，免費額度較少）"),
+    "gemini-3.5-flash-lite": t("Gemini 3.5 Flash-Lite（較快，免費額度較多）"),
 }
 CACHE = ROOT / "cache" / "translations.jsonl"
 TIMEOUT_MS = 30_000
 
-TRANSLATE_PROMPT = """把下面的日文翻成自然、口語的繁體中文（台灣用語）。
-只輸出譯文：不要解釋、不要加引號、不要附原文。原文有幾行就輸出幾行，逐行對應。
-原文可能是遊戲台詞、動畫字幕、漫畫對話或小說，可能有文字辨識的錯字，照最可能的意思翻。
+TRANSLATE_PROMPT = (
+    "把下面的日文翻成自然、口語的繁體中文（台灣用語）。\n"  # i18n: 不翻
+    "只輸出譯文：不要解釋、不要加引號、不要附原文。原文有幾行就輸出幾行，逐行對應。\n"
+    "原文可能是遊戲台詞、動畫字幕、漫畫對話或小說，可能有文字辨識的錯字，照最可能的意思翻。\n"
+    "\n"
+    "{text}"
+)
+
+TRANSLATE_PROMPT_EN = """Translate the following Japanese into natural, conversational English.
+Output only the translation: no explanations, no quotation marks, no original text. Output the same number of lines as the original, line by line.
+The text may be game dialogue, anime subtitles, manga speech or a novel, and may contain OCR errors; translate the most likely meaning.
 
 {text}"""
 
-EXPLAIN_PROMPT = """你是日文老師，學生的母語是繁體中文（台灣），程度約 N4～N2。請講解下面這句日文，用繁體中文回答，
-格式用簡單的 Markdown（小標題、條列），不要寒暄、不要重複題目：
+EXPLAIN_PROMPT = (
+    "你是日文老師，學生的母語是繁體中文（台灣），程度約 N4～N2。請講解下面這句日文，用繁體中文回答，\n"  # i18n: 不翻
+    "格式用簡單的 Markdown（小標題、條列），不要寒暄、不要重複題目：\n"
+    "\n"
+    "1. **翻譯**：自然的中文翻譯；如果直譯和意譯差很多，兩個都給。\n"
+    "2. **拆解**：依序列出句子裡的詞和文法句型（寫法、讀音、意思、在句中的作用）。基本的助詞簡短帶過，重點放在學生可能不懂的地方。\n"
+    "3. **為什麼這樣說**：語氣、省略的主語或受詞、敬語、口語或方言的說法、說話者的態度。\n"
+    "4. 如果原文看起來有文字辨識的錯字，指出最可能的正確寫法。\n"
+    "\n"
+    "句子：\n"
+    "{text}"
+)
 
-1. **翻譯**：自然的中文翻譯；如果直譯和意譯差很多，兩個都給。
-2. **拆解**：依序列出句子裡的詞和文法句型（寫法、讀音、意思、在句中的作用）。基本的助詞簡短帶過，重點放在學生可能不懂的地方。
-3. **為什麼這樣說**：語氣、省略的主語或受詞、敬語、口語或方言的說法、說話者的態度。
-4. 如果原文看起來有文字辨識的錯字，指出最可能的正確寫法。
+EXPLAIN_PROMPT_EN = """You are a Japanese teacher. The student is an English speaker at about JLPT N4–N2. Explain the following Japanese sentence in English,
+using simple Markdown (short headings, bullet points). No greetings, don't repeat the question:
 
-句子：
+1. **Translation**: a natural English translation; if a literal and a free translation differ a lot, give both.
+2. **Breakdown**: list the words and grammar patterns in order (spelling, reading, meaning, role in the sentence). Keep basic particles brief; focus on what the student may not know.
+3. **Why it's said this way**: tone, omitted subject or object, keigo, colloquial or dialect forms, the speaker's attitude.
+4. If the text looks like it has OCR errors, point out the most likely correct spelling.
+
+Sentence:
 {text}"""
 
 
@@ -83,7 +105,7 @@ def get_key(kind: str = "gemini") -> tuple[str, str]:
 def set_key(key: str, kind: str = "gemini"):
     kr = _keyring()
     if kr is None:
-        raise AIError(f"這台電腦不能用 Windows 認證管理員存 Key，請改設環境變數 {KEYS[kind][1]}。")
+        raise AIError(t("這台電腦不能用 Windows 認證管理員存 Key，請改設環境變數 {env}。", env=KEYS[kind][1]))
     kr.set_password(SERVICE, KEYS[kind][0], key.strip())
     _clients.clear()
 
@@ -112,18 +134,19 @@ def looks_like_key(text: str) -> bool:
 
 
 def masked(key: str) -> str:
-    return f"…{key[-4:]}" if len(key) > 8 else "很短，可能貼錯了"
+    return f"…{key[-4:]}" if len(key) > 8 else t("很短，可能貼錯了")
 
 
 # ---------------------------------------------------------------- 呼叫
 _clients: dict[str, object] = {}
+_BUSY = t("Gemini 現在很忙，等一下再試。")
 _lock = threading.Lock()
 
 
 def _client():
     key, _ = get_key()
     if not key:
-        raise AIError("還沒有設定 Gemini API Key：系統匣 → 設定 → 翻譯與 AI，貼上 Key。")
+        raise AIError(t("還沒有設定 Gemini API Key：系統匣 → 設定 → 翻譯與 AI，貼上 Key。"))
     with _lock:
         if key not in _clients:
             from google import genai
@@ -140,7 +163,7 @@ def _generate(model: str, prompt: str, retries: int = 0) -> str:
         try:
             return _generate(model, prompt)
         except AIError as e:
-            if "很忙" not in str(e):
+            if str(e) != _BUSY:
                 raise
             time.sleep(3 * (i + 1))
     from google.genai import errors
@@ -152,24 +175,24 @@ def _generate(model: str, prompt: str, retries: int = 0) -> str:
         code = getattr(e, "code", None)
         log.warning("Gemini %s 失敗：%s %s", model, code, redact((getattr(e, "message", "") or "")[:200]))
         if code in (401, 403) or (code == 400 and "API key" in str(e)):
-            raise AIError("API Key 無效或沒有權限，請到設定 → 翻譯與 AI 重新貼上。") from None
+            raise AIError(t("API Key 無效或沒有權限，請到設定 → 翻譯與 AI 重新貼上。")) from None
         if code == 429:
-            raise AIError(f"{model} 的免費額度暫時用完了，等一下再試（或換別的模型）。") from None
+            raise AIError(t("{model} 的免費額度暫時用完了，等一下再試（或換別的模型）。", model=model)) from None
         if code in (500, 502, 503, 504):
-            raise AIError("Gemini 現在很忙，等一下再試。") from None
-        raise AIError(f"Gemini 回傳錯誤（{code}）。") from None
+            raise AIError(_BUSY) from None
+        raise AIError(t("Gemini 回傳錯誤（{code}）。", code=code)) from None
     except Exception as e:  # noqa: BLE001（網路斷線、逾時）
         log.warning("Gemini %s 連線失敗：%s", model, redact(e))
-        raise AIError("連不上 Gemini（網路有問題或逾時）。") from None
+        raise AIError(t("連不上 Gemini（網路有問題或逾時）。")) from None
     text = (resp.text or "").strip()
     if not text:
-        raise AIError("Gemini 沒有回傳內容（可能被安全過濾擋下），換個說法再試。")
+        raise AIError(t("Gemini 沒有回傳內容（可能被安全過濾擋下），換個說法再試。"))
     return text
 
 
-_cache: dict[str, str] | None = None
+_cache: dict[tuple[str, str], str] | None = None  # (語言, cache_key) → 譯文
 _QUOTES = "「」『』（）()【】〔〕［］[]〈〉《》\"'“”‘’"
-_ELLIPSIS = re.compile(r"…+|\.{2,}|・{2,}|‥+")
+_ELLIPSIS = re.compile(r"…+|\.{2,}|・{2,}|‥+")  # i18n: 不翻
 
 
 def cache_key(text: str) -> str:
@@ -190,7 +213,8 @@ def text_length(text: str) -> int:
     return sum(1 for ch in unicodedata.normalize("NFKC", text) if unicodedata.category(ch)[0] in "LN")
 
 
-def _load_cache() -> dict[str, str]:
+def _load_cache() -> dict[tuple[str, str], str]:
+    """快取檔一行一句：{"text", "zh"（譯文；欄位名稱是舊的，英文譯文也放這裡）, "model", "lang"（沒有＝繁體中文）}。"""
     global _cache
     if _cache is None:
         _cache = {}
@@ -198,7 +222,7 @@ def _load_cache() -> dict[str, str]:
             for line in CACHE.read_text(encoding="utf-8").splitlines():
                 try:
                     r = json.loads(line)
-                    _cache[cache_key(r["text"])] = r["zh"]  # 舊的快取也用同樣的規則整理
+                    _cache[(r.get("lang", "zh-TW"), cache_key(r["text"]))] = r["zh"]  # 舊的快取也用同樣的規則整理
                 except (ValueError, KeyError):
                     continue
         except FileNotFoundError:
@@ -206,9 +230,14 @@ def _load_cache() -> dict[str, str]:
     return _cache
 
 
-def cached_translation(text: str) -> str | None:
+def cached_translation(text: str, lang: str = "zh-TW") -> str | None:
     with _lock:
-        return _load_cache().get(cache_key(text))
+        return _load_cache().get((lang, cache_key(text)))
+
+
+def translate_lang(cfg) -> str:
+    """翻成哪種語言（Config.explain_lang）：English 或繁體中文（快取分開存）。"""
+    return "en" if getattr(cfg, "explain_lang", "") == "en" else "zh-TW"
 
 
 def openai_chat(base_url: str, model: str, prompt: str) -> str:
@@ -218,7 +247,7 @@ def openai_chat(base_url: str, model: str, prompt: str) -> str:
     import urllib.error
     import urllib.request
     if not base_url or not model:
-        raise AIError("自訂翻譯服務還沒設定好：設定 → 翻譯與 AI，填網址和模型名稱。")
+        raise AIError(t("自訂翻譯服務還沒設定好：設定 → 翻譯與 AI，填網址和模型名稱。"))
     url = base_url.strip().rstrip("/")
     from urllib.parse import urlparse
     if not urlparse(url).path:  # 只填了主機（http://localhost:11434、https://api.openai.com）：OpenAI 相容的路徑在 /v1 底下
@@ -232,7 +261,7 @@ def openai_chat(base_url: str, model: str, prompt: str) -> str:
         headers["Authorization"] = f"Bearer {key}"
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
                        "temperature": 0.2}).encode("utf-8")
-    t = time.perf_counter()
+    t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=TIMEOUT_MS / 1000) as r:
             data = json.loads(r.read().decode("utf-8"))
@@ -240,35 +269,37 @@ def openai_chat(base_url: str, model: str, prompt: str) -> str:
         detail = redact(e.read().decode("utf-8", "replace")[:200])
         log.warning("自訂翻譯服務 %s 失敗：%s %s", model, e.code, detail)
         if e.code == 401:
-            raise AIError("自訂翻譯服務的 Key 無效。") from None
+            raise AIError(t("自訂翻譯服務的 Key 無效。")) from None
         if e.code == 403:
-            raise AIError(f"自訂翻譯服務拒絕存取（403）：Key 沒有權限，或被服務的防護擋下。{detail[:80]}") from None
+            raise AIError(t("自訂翻譯服務拒絕存取（403）：Key 沒有權限，或被服務的防護擋下。{detail}", detail=detail[:80])) from None
         if e.code == 404:
-            raise AIError("自訂翻譯服務回 404：網址或模型名稱可能打錯。") from None
+            raise AIError(t("自訂翻譯服務回 404：網址或模型名稱可能打錯。")) from None
         if e.code == 429:
-            raise AIError("自訂翻譯服務的額度暫時用完了，等一下再試。") from None
-        raise AIError(f"自訂翻譯服務回傳錯誤（{e.code}）。") from None
+            raise AIError(t("自訂翻譯服務的額度暫時用完了，等一下再試。")) from None
+        raise AIError(t("自訂翻譯服務回傳錯誤（{code}）。", code=e.code)) from None
     except Exception as e:  # noqa: BLE001（網址錯、連不上、逾時）
         log.warning("自訂翻譯服務連線失敗：%s", redact(e))
-        raise AIError("連不上自訂翻譯服務（網址錯誤、網路有問題或逾時）。") from None
+        raise AIError(t("連不上自訂翻譯服務（網址錯誤、網路有問題或逾時）。")) from None
     try:
         text = (data["choices"][0]["message"]["content"] or "").strip()
     except (KeyError, IndexError, TypeError):
-        raise AIError("自訂翻譯服務回傳的格式看不懂（不是 OpenAI 相容格式？）。") from None
+        raise AIError(t("自訂翻譯服務回傳的格式看不懂（不是 OpenAI 相容格式？）。")) from None
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # 會輸出思考過程的模型（DeepSeek-R1、Qwen3）
     if not text:
-        raise AIError("自訂翻譯服務沒有回傳內容。")
-    log.info("自訂翻譯服務 %s：%.2f 秒", model, time.perf_counter() - t)
+        raise AIError(t("自訂翻譯服務沒有回傳內容。"))
+    log.info("自訂翻譯服務 %s：%.2f 秒", model, time.perf_counter() - t0)
     return text
 
 
 def translate(text: str, cfg=None, force: bool = False) -> str:
     """整句翻譯（同一句只翻一次）。在背景執行緒呼叫。cfg 決定翻譯來源（Config.translate_provider），沒給就用 Gemini。
-    force：不看快取、重新翻譯（結果視窗的「重新翻譯」），新的譯文取代快取裡舊的（檔案裡後面的行蓋前面的）。"""
-    hit = None if force else cached_translation(text)
+    force：不看快取、重新翻譯（結果視窗的「重新翻譯」），新的譯文取代快取裡舊的（檔案裡後面的行蓋前面的）。
+    翻成哪種語言看 cfg.explain_lang（translate_lang）。"""
+    lang = translate_lang(cfg)
+    hit = None if force else cached_translation(text, lang)
     if hit is not None:
         return hit
-    prompt = TRANSLATE_PROMPT.format(text=text)
+    prompt = (TRANSLATE_PROMPT_EN if lang == "en" else TRANSLATE_PROMPT).format(text=text)
     if cfg is not None and cfg.translate_provider == "openai":
         model = cfg.openai_model
         zh = openai_chat(cfg.openai_base_url, model, prompt)
@@ -276,21 +307,23 @@ def translate(text: str, cfg=None, force: bool = False) -> str:
         model = TRANSLATE_MODEL
         zh = _generate(model, prompt)
     with _lock:
-        _load_cache()[cache_key(text)] = zh
+        _load_cache()[(lang, cache_key(text))] = zh
         try:
             CACHE.parent.mkdir(parents=True, exist_ok=True)
             with open(CACHE, "a", encoding="utf-8", newline="\n") as f:
-                f.write(json.dumps({"text": text, "zh": zh, "model": model}, ensure_ascii=False) + "\n")
+                row = {"text": text, "zh": zh, "model": model} | ({"lang": lang} if lang != "zh-TW" else {})
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         except OSError:
             log.exception("寫入翻譯快取失敗")
     log.info("翻譯（%s）：%s → %s", model, text[:40], zh[:40])
     return zh
 
 
-def explain(text: str, model: str) -> str:
+def explain(text: str, model: str, lang: str = "zh-TW") -> str:
+    """lang：用哪種語言講解（Config.explain_lang）。"""
     if model not in EXPLAIN_MODELS:
         model = next(iter(EXPLAIN_MODELS))
-    out = _generate(model, EXPLAIN_PROMPT.format(text=text), retries=2)
+    out = _generate(model, (EXPLAIN_PROMPT_EN if lang == "en" else EXPLAIN_PROMPT).format(text=text), retries=2)
     log.info("講解（%s）：%s（%d 字）", model, text[:40], len(out))
     return out
 
@@ -318,7 +351,7 @@ def run_async(fn, callback):
         except Exception as e:  # noqa: BLE001
             import traceback
             log.error("Gemini 呼叫失敗\n%s", redact(traceback.format_exc()))
-            res, err = None, f"發生錯誤：{redact(e)}"
+            res, err = None, t("發生錯誤：{err}", err=redact(e))
         _relay.done.emit(callback, res, err)
 
     threading.Thread(target=work, name="gemini", daemon=True).start()

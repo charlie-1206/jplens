@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .config import APP_DIR
+from .i18n import t
 
 log = logging.getLogger("jplens")
 ASR_DIR = APP_DIR / "data" / "models" / "asr"
@@ -180,6 +181,33 @@ def slow_down(audio: np.ndarray, rate: int, speed: float) -> tuple[np.ndarray, i
                 log.exception("無字幕模式：PyAV 的 atempo 不能用，倍速改用調整取樣率")
             _atempo_ok = False
     return audio, max(8000, int(rate / speed))
+
+
+def ending(text: str) -> str:
+    """一段話最後一個詞看起來是不是講完了（Sudachi 詞性）：
+    "end"＝講完（終助詞、終止形、命令形、意志形、感動詞）；"cont"＝句子不會停在這裡（格助詞、係助詞、連用形、接續詞…）；
+    "?"＝分不出來（名詞結尾；接續助詞「けど」「から」「て」口語常拿來收尾：「わかってるけど」「ちょっと待って」）。"""
+    from .jlearn.analysis import tokenize
+    toks = [t for t in tokenize(text) if not t.is_punct()]
+    if not toks:
+        return "?"
+    p1, p2, cform = toks[-1].pos[0], toks[-1].pos[1], toks[-1].pos[5]
+    if p1 == "助詞":  # i18n: 不翻
+        return "end" if p2 == "終助詞" else "?" if p2 == "接続助詞" else "cont"  # i18n: 不翻
+    if p1 in ("動詞", "形容詞", "助動詞"):  # i18n: 不翻
+        if cform.startswith(("終止形", "命令形", "意志推量形")):  # i18n: 不翻
+            return "end"
+        return "cont" if cform.startswith(("連用形", "仮定形", "未然形")) else "?"  # i18n: 不翻
+    if p1 == "感動詞":  # i18n: 不翻
+        return "end"
+    return "cont" if p1 in ("接続詞", "連体詞", "接頭辞") else "?"  # i18n: 不翻
+
+
+def starts_turn(text: str) -> bool:
+    """一段話以感嘆詞開頭（えっ、ねえ、そう、はい…）：多半是換人講話或新的一句，不接在上一段後面。"""
+    from .jlearn.analysis import tokenize
+    toks = [t for t in tokenize(text) if not t.is_punct()]
+    return bool(toks) and toks[0].pos[0] == "感動詞"  # i18n: 不翻
 
 
 @dataclass
@@ -493,7 +521,7 @@ class Listener:
             w.writeframes((np.clip(a, -1, 1) * 32767).astype(np.int16).tobytes())
         t0 = chunks[0][0] - 1
         lines = [time.strftime("%H:%M:%S ", time.localtime(t)) + text for t, text in self.lines if t >= t0]
-        head = time.strftime("聲音從 %H:%M:%S", time.localtime(chunks[0][0])) + time.strftime(" 到 %H:%M:%S（沒在播的時間跳過）", time.localtime(chunks[-1][0]))
+        head = time.strftime("聲音從 %H:%M:%S", time.localtime(chunks[0][0])) + time.strftime(" 到 %H:%M:%S（沒在播的時間跳過）", time.localtime(chunks[-1][0]))  # i18n: 不翻
         path.with_suffix(".txt").write_text("\n".join([head] + lines), encoding="utf-8")
         return len(a) / rate
 
@@ -533,11 +561,11 @@ class Listener:
         ctypes.windll.ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
         p = stream = None
         try:
-            t = time.perf_counter()
+            t_open = time.perf_counter()
             p, stream, rate, name = self._open()
             tr = self.tr = Transcriber(rate, partial_every=PARTIAL_EVERY if self.partial else 0, speed=self.speed)
-            log.info("無字幕模式：開始聆聽「%s」（%d Hz）；載入 %.1f 秒", name, rate, time.perf_counter() - t)
-            self.on_state(f"聆聽中：{name}", False)
+            log.info("無字幕模式：開始聆聽「%s」（%d Hz）；載入 %.1f 秒", name, rate, time.perf_counter() - t_open)
+            self.on_state(t("聆聽中：{name}", name=name), False)
             last_sound = time.perf_counter()
             while not self._stop.is_set():
                 try:
@@ -560,7 +588,7 @@ class Listener:
                     p, stream, new_rate, new_name = self._open()
                     if new_name != name:
                         log.info("無字幕模式：播放裝置換成「%s」（%d Hz）", new_name, new_rate)
-                        self.on_state(f"聆聽中：{new_name}", False)
+                        self.on_state(t("聆聽中：{name}", name=new_name), False)
                     if new_rate != rate:
                         tr.set_rate(new_rate)
                     name, rate = new_name, new_rate
@@ -568,7 +596,7 @@ class Listener:
                         self._q.get_nowait()
         except Exception as e:  # noqa: BLE001
             log.exception("無字幕模式出錯")
-            self.on_state(f"無字幕模式出錯：{e}", True)
+            self.on_state(t("無字幕模式出錯：{err}", err=e), True)
         finally:
             if p is not None:
                 self._close(p, stream)

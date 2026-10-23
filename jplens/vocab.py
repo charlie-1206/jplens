@@ -15,7 +15,9 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import lang
 from .config import ROOT
+from .i18n import t
 from .words import WordInfo
 
 VOCAB_DIR = ROOT / "vocab"
@@ -57,22 +59,22 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def _short_pos(pos: str) -> str:
     """詞性轉成單字 App 使用的縮寫（n. / v. / adj. / adv.），其他詞性留空（同 video_translate 的 notes._short_pos）。"""
-    if pos.startswith("名詞"):  # 名詞（する動詞）→ n.；名詞／な形容詞 → adj.
-        return "adj." if "形容" in pos else "n."
-    if "動詞" in pos and "助動詞" not in pos:
+    if pos.startswith("名詞"):  # 名詞（する動詞）→ n.；名詞／な形容詞 → adj.  # i18n: 不翻
+        return "adj." if "形容" in pos else "n."  # i18n: 不翻
+    if "動詞" in pos and "助動詞" not in pos:  # i18n: 不翻
         return "v."
-    if "形容" in pos:
+    if "形容" in pos:  # i18n: 不翻
         return "adj."
-    if "副詞" in pos:
+    if "副詞" in pos:  # i18n: 不翻
         return "adv."
-    if "名詞" in pos:
+    if "名詞" in pos:  # i18n: 不翻
         return "n."
     return ""
 
 
-_POS_FROM_APP = {"n.": "名詞", "v.": "動詞", "adj.": "形容詞", "adv.": "副詞"}
-_ALSO_MEANING = re.compile(r"^讀(.+?)的意思：(.*)$")
-_HAS_CJK = re.compile(r"[㐀-鿿]")
+_POS_FROM_APP = {"n.": "名詞", "v.": "動詞", "adj.": "形容詞", "adv.": "副詞"}  # i18n: 不翻
+_ALSO_MEANING = re.compile(r"^讀(.+?)的意思：(.*)$")  # i18n: 不翻
+_HAS_CJK = re.compile(r"[㐀-鿿]")  # i18n: 不翻
 
 
 def from_app_word(w: dict) -> dict | None:
@@ -119,7 +121,7 @@ def parse_import(text: str) -> list[dict]:
     if isinstance(data, dict) and isinstance(data.get("words"), list):
         version = data.get("version") or 1
         if not isinstance(version, int) or version > 2:
-            raise ValueError(f"備份檔的版本（{version}）比這個程式支援的新")
+            raise ValueError(t("備份檔的版本（{version}）比這個程式支援的新", version=version))
         return [r for r in (from_app_word(w) for w in data["words"] if isinstance(w, dict)) if r]
     out = []
     for line in text.splitlines():
@@ -130,7 +132,7 @@ def parse_import(text: str) -> list[dict]:
         if isinstance(r, dict) and r.get("word"):
             out.append(r)
     if not out:
-        raise ValueError("看不懂這個檔案：要單字 App 的備份檔或單字本的完整備份（.jsonl）")
+        raise ValueError(t("看不懂這個檔案：要單字 App 的備份檔或單字本的完整備份（.jsonl）"))
     return out
 
 
@@ -186,7 +188,7 @@ class VocabStore:
         """單字的「也讀」[(讀音, 意思)]。2026-10-21 以前記錄的沒有 also 欄位：用字典現查補上（不寫回檔案）。"""
         if "also" in rec:
             return [(rd, mean) for rd, mean in rec.get("also") or []]
-        if self.dictionary is None or rec.get("jlpt") in ("專有名詞", "文法") or rec.get("pos") == "文法":
+        if self.dictionary is None or rec.get("jlpt") in ("專有名詞", "文法") or rec.get("pos") == "文法":  # i18n: 不翻
             return []
         key = key_of(rec)
         if key not in self._also_cache:
@@ -202,7 +204,11 @@ class VocabStore:
 
     def also_meanings(self, rec: dict) -> list[str]:
         """也讀的意思接在原本的意思後面：「讀かなめ的意思：樞紐、關鍵」（裡面改用頓號，才不會和意思之間的「；」混在一起）。"""
-        return [f"讀{rd}的意思：{mean.replace('；', '、')}" for rd, mean in self.also_of(rec)]
+        return [f"讀{rd}的意思：{mean.replace('；', '、')}" for rd, mean in self.also_of(rec)]  # i18n: 不翻
+
+    def also_display(self, rec: dict) -> list[str]:
+        """畫面上顯示、複製用的也讀（介面語言）；匯出和匯入解析用 also_meanings 的固定格式。"""
+        return [t("讀{rd}的意思：{mean}", rd=rd, mean=mean.replace("；", "、")) for rd, mean in self.also_of(rec)]
 
     # ---------------------------------------------------------------- 單字本視窗：修改、刪除
     def _rewrite(self, path: Path, records: list[dict]):
@@ -230,7 +236,7 @@ class VocabStore:
             raise KeyError(key)
         new = {**records[idx], **fields}
         if key_of(new) != key and any(key_of(r) == key_of(new) for r in records):
-            raise ValueError(f"單字本裡已經有「{new.get('word')}【{new.get('reading')}】」")
+            raise ValueError(t("單字本裡已經有「{word}【{reading}】」", word=new.get("word"), reading=new.get("reading")))
         records[idx] = new
         self._save_records(records)
         return new
@@ -397,7 +403,8 @@ class VocabStore:
                 ms = int(datetime.fromisoformat(r["saved_at"]).timestamp() * 1000)
             except (KeyError, ValueError):
                 ms = 0
-            definition = "；".join(r.get("meaning_zh") or []) or "; ".join(r.get("meaning_en") or [])
+            mean = lang.rec_meanings(r)[0]
+            definition = ("；" if _HAS_CJK.search("".join(mean)) else "; ").join(mean)
             # 也讀：App 的格式沒有這個欄位（version 不能升），讀音接在 reading 後面、意思接在解釋後面；uid 不變（App 才認得是同一個字）
             definition = "；".join(([definition] if definition else []) + self.also_meanings(r))
             words.append({

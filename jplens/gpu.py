@@ -18,6 +18,8 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from .i18n import t
+
 log = logging.getLogger("jplens")
 LOCAL_CUDA = Path(__file__).resolve().parents[1] / "data" / "cuda"
 _DLLS = ("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll")
@@ -74,7 +76,9 @@ def cuda_ready() -> bool:
 
 def _dml_faster() -> bool:
     """DirectML 實測比 CPU 快才用：弱的內顯反而慢很多（10-22 實測 Intel UHD：整個螢幕偵測 4.1 秒，CPU 0.66 秒）。
-    用整個螢幕偵測的模型跑一張 640×640 各兩次，比第二次的時間。約 1～2 秒，只在沒有 CUDA、有 DirectML 時跑一次。"""
+    用整個螢幕偵測的模型跑一張 640×640：各先跑一次暖機，再跑 3 次取最快的（10-23：只量一次時，
+    打包後的自我測試偶爾量成 DirectML 比 CPU 慢、改用 CPU；顯示卡剛從省電狀態喚醒之類的雜訊）。
+    約 1～2 秒，只在沒有 CUDA、有 DirectML 時跑一次。"""
     import numpy as np
     import onnxruntime as ort
 
@@ -93,9 +97,12 @@ def _dml_faster() -> bool:
         sess = ort.InferenceSession(str(path), so, providers=prov)
         feed = {sess.get_inputs()[0].name: x}
         sess.run(None, feed)
-        t = time.perf_counter()
-        sess.run(None, feed)
-        times[name] = time.perf_counter() - t
+        runs = []
+        for _ in range(3):
+            t = time.perf_counter()
+            sess.run(None, feed)
+            runs.append(time.perf_counter() - t)
+        times[name] = min(runs)
     log.info("DirectML %.0f ms、CPU %.0f ms（640×640 文字偵測）", times["dml"] * 1000, times["cpu"] * 1000)
     return times["dml"] < times["cpu"] * 0.7
 
@@ -120,7 +127,7 @@ def backend() -> str:
 
 
 def name() -> str:
-    return {"cuda": "CUDA（NVIDIA 顯示卡）", "dml": "DirectML（顯示卡）", "cpu": "CPU"}[_backend or "cpu"]
+    return {"cuda": t("CUDA（NVIDIA 顯示卡）"), "dml": t("DirectML（顯示卡）"), "cpu": "CPU"}[_backend or "cpu"]
 
 
 def providers() -> list:

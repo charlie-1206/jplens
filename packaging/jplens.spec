@@ -31,6 +31,12 @@ datas = [
     (str(ROOT / "NOTICE.md"), "."),
     (str(ROOT / "LICENSE"), "."),
 ]
+GRAMMAR_EN = ROOT / "jplens" / "jlearn" / "grammar_en.json"  # 文法說明的英文版（tools/grammar_en_batches.py；還沒翻就沒有）
+if GRAMMAR_EN.exists():
+    datas.append((str(GRAMMAR_EN), "jplens/jlearn"))
+UI_EN = ROOT / "jplens" / "i18n_en.json"  # 英文介面的對照表（tools/i18n_check.py）
+if UI_EN.exists():
+    datas.append((str(UI_EN), "jplens"))
 datas += collect_data_files("rapidocr_onnxruntime")
 datas += collect_data_files("sudachipy")
 datas += collect_data_files("sudachidict_core")

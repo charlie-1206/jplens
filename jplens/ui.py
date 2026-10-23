@@ -14,18 +14,20 @@ from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPen,
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton,
                                QScrollArea, QTextEdit, QVBoxLayout, QWidget)
 
+from . import lang
+from .i18n import t
 from .words import WordInfo
 
-LEVEL_CHOICES = [("全部", 5), ("N4 以上", 4), ("N3 以上", 3), ("N2 以上", 2), ("N1", 1)]
+LEVEL_CHOICES = [(t("全部"), 5), (t("N4 以上"), 4), (t("N3 以上"), 3), (t("N2 以上"), 2), ("N1", 1)]
 LEVEL_COLORS = {"N5": "#6b8e6b", "N4": "#4f8a8b", "N3": "#4a6fa5", "N2": "#8a5fa8", "N1": "#b5524a",
-                "級外": "#7a7a7a", "專有名詞": "#9a7b3c"}
+                "級外": "#7a7a7a", "專有名詞": "#9a7b3c"}  # i18n: 不翻
 BORDER = 3
 LIST_MAX_H = 420  # 單字清單最高多少（邏輯像素），超過就捲動
 MODES = {  # 選取模式：按鈕文字、說明
-    "text": ("反白", "目前是反白模式：按住 Alt 沿著文字拖曳選字。"),
-    "box": ("框選", "目前是框選模式：按住 Alt 拖曳出矩形。"),
-    "manga": ("漫畫", "目前是漫畫模式：按住 Alt 框住對話框，或按住 Alt 雙擊對話框。\n"
-                      "用漫畫專用的模型找出對話框裡的字、整塊讀，不會漏欄；只適合漫畫（字幕、小說請用另外兩種）。"),
+    "text": (t("反白"), t("目前是反白模式：按住 Alt 沿著文字拖曳選字。")),
+    "box": (t("框選"), t("目前是框選模式：按住 Alt 拖曳出矩形。")),
+    "manga": (t("漫畫"), t("目前是漫畫模式：按住 Alt 框住對話框，或按住 Alt 雙擊對話框。\n"
+                         "用漫畫專用的模型找出對話框裡的字、整塊讀，不會漏欄；只適合漫畫（字幕、小說請用另外兩種）。")),
 }
 LIST_SENSES = 3  # 清單裡每個字最多顯示幾個意思（英文少一個，因為比較長）；完整內容在滑鼠提示
 
@@ -337,11 +339,11 @@ class WordRow(QFrame):
             rd = QLabel(w.reading)
             rd.setObjectName("reading")
             head.addWidget(rd)
-        badge = QLabel(w.jlpt)
+        badge = QLabel(t(w.jlpt))
         badge.setStyleSheet(f"background:{LEVEL_COLORS.get(w.jlpt, '#777')}; color:white; border-radius:3px;"
                             f"padding:0px 5px; font-size:{round(11 * scale)}px;")
         head.addWidget(badge)
-        pos = QLabel(w.pos)
+        pos = QLabel(t(w.pos))
         pos.setObjectName("pos")
         head.addWidget(pos)
         top.addLayout(head, 1)
@@ -360,42 +362,46 @@ class WordRow(QFrame):
         if zh:
             m = QLabel("；".join(zh[:LIST_SENSES]))
             m.setObjectName("meaning")
+        elif lang.english():  # 解釋用英文：英文就是主要的意思
+            en = "; ".join(en_list[:LIST_SENSES]) if en_list else w.jlpt_en
+            m = QLabel(en or "(not in the dictionary)")
+            m.setObjectName("meaning")
         else:
             en = "; ".join(en_list[:LIST_SENSES - 1]) if en_list else w.jlpt_en
-            m = QLabel(f"〔英〕{en}" if en else "（字典查不到）")
+            m = QLabel(t("〔英〕{en}", en=en) if en else t("（字典查不到）"))
             m.setObjectName("meaning_en")
         m.setWordWrap(True)
         m.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(m)
         if w.also:  # 同寫法的其他常用讀音（「要」よう／かなめ）：斷詞選的讀音不一定是文中的那個
-            also = QLabel("也讀：" + "　".join(f"{rd}（{mean}）" for rd, mean in w.also))
+            also = QLabel(t("也讀：") + "　".join(f"{rd}（{mean}）" for rd, mean in w.also))
             also.setObjectName("also")
             also.setWordWrap(True)
             also.setTextInteractionFlags(Qt.TextSelectableByMouse)
             lay.addWidget(also)
-        tip = [f"{w.word} {w.jlpt}" if w.is_grammar else f"{w.word}【{w.reading}】{w.jlpt}"]
+        tip = [f"{w.word} {t(w.jlpt)}" if w.is_grammar else f"{w.word}【{w.reading}】{t(w.jlpt)}"]
         if w.formation:
-            tip.append("接續：" + w.formation)
+            tip.append(t("接續：") + w.formation)
         if w.zh:
             main, rare = w.zh[:len(w.zh) - w.rare_zh], w.zh[len(w.zh) - w.rare_zh:]
-            tip.append("中：" + "；".join(main or rare) + (f"　〔少用〕{'；'.join(rare)}" if main and rare else ""))
+            tip.append(t("中：") + "；".join(main or rare) + (t("　〔少用〕{rare}", rare="；".join(rare)) if main and rare else ""))
         if w.en or w.jlpt_en:
-            tip.append("英：" + (" / ".join(w.en) if w.en else w.jlpt_en))
+            tip.append(t("英：") + (" / ".join(w.en) if w.en else w.jlpt_en))
         for rd, mean in w.also:
-            tip.append(f"也讀【{rd}】：{mean}")
+            tip.append(t("也讀【{rd}】：{mean}", rd=rd, mean=mean))
         for n in w.notes:  # 文法：JLPT_grammer 的說明（同一條規則對到好幾條時各自標名稱）
             head = f"〔{n['pattern']}〕" if len(w.notes) > 1 else ""
             if n.get("meaning"):
-                tip.append(f"說明{head}：{n['meaning']}")
+                tip.append(t("說明{head}：{text}", head=head, text=n["meaning"]))
             if n.get("formation") and n["formation"] != w.formation:
-                tip.append(f"接續{head}：{n['formation']}")
+                tip.append(t("接續{head}：{text}", head=head, text=n["formation"]))
             if n.get("example"):
-                tip.append(f"例句{head}：{n['example']}")
-        tip.append("句子：" + w.sentence)
+                tip.append(t("例句{head}：{text}", head=head, text=n["example"]))
+        tip.append(t("句子：") + w.sentence)
         self.setToolTip("\n".join(tip))
 
     def set_saved(self, saved: bool):
-        self.btn.setText("✓ 已記錄" if saved else "＋ 記錄")
+        self.btn.setText(t("✓ 已記錄") if saved else t("＋ 記錄"))
         self.btn.setObjectName("saved" if saved else "")
         self.btn.setEnabled(not saved)
         self.btn.style().unpolish(self.btn)
@@ -480,7 +486,7 @@ class ResultPopup(QWidget):
         lay.setSpacing(6)
 
         head = QHBoxLayout()
-        self.title = QLabel("查字")
+        self.title = QLabel(t("查字"))
         self.title.setObjectName("title")
         head.addWidget(self.title)
         head.addStretch(1)
@@ -490,13 +496,13 @@ class ResultPopup(QWidget):
         self.level.setCurrentIndex(next(i for i, (_, lv) in enumerate(LEVEL_CHOICES) if lv == cfg.min_level)
                                    if cfg.min_level in dict(LEVEL_CHOICES).values() else 2)
         self.level.currentIndexChanged.connect(self._on_filter)
-        self.level.setToolTip("只顯示這個級數以上的單字（級外的字一律顯示）")
+        self.level.setToolTip(t("只顯示這個級數以上的單字（級外的字一律顯示）"))
         head.addWidget(self.level)
-        self.proper = QCheckBox("專有名詞")
+        self.proper = QCheckBox(t("專有名詞"))
         self.proper.setChecked(cfg.show_proper)
         self.proper.toggled.connect(self._on_filter)
         head.addWidget(self.proper)
-        self.text_btn = self._flat("文", "顯示／隱藏辨識出的原文", checkable=True, checked=cfg.show_text)
+        self.text_btn = self._flat(t("文"), t("顯示／隱藏辨識出的原文"), checkable=True, checked=cfg.show_text)
         self.text_btn.toggled.connect(self._on_toggle_text)
         head.addWidget(self.text_btn)
         self.mode_btn = QPushButton()
@@ -505,14 +511,15 @@ class ResultPopup(QWidget):
         self.mode_btn.clicked.connect(self._toggle_mode)
         self._show_mode()
         head.addWidget(self.mode_btn)
-        self.pin = self._flat("📌", "釘選：點別的地方、按 Esc 時不要自動關閉", checkable=True)
+        self.pin = self._flat("📌", t("釘選：點別的地方、按 Esc 時不要自動關閉"), checkable=True)
         self.pin.toggled.connect(lambda on: self.pin.setToolTip(
-            "已釘選：點別的地方、按 Esc 都不會關閉，要按 ✕（再按一次取消釘選）" if on else "釘選：點別的地方、按 Esc 時不要自動關閉"))
+            t("已釘選：點別的地方、按 Esc 都不會關閉，要按 ✕（再按一次取消釘選）") if on
+            else t("釘選：點別的地方、按 Esc 時不要自動關閉")))
         self._auto_pin = False  # 按「翻譯」時自動釘選的（結果回來就取消）
         self._pin_job = None    # 自動釘選是為了等哪個翻譯請求
         self.pin.clicked.connect(lambda: setattr(self, "_auto_pin", False))  # 使用者自己按了釘選：之後照使用者的
         head.addWidget(self.pin)
-        close = self._flat("✕", "關閉（Esc）")
+        close = self._flat("✕", t("關閉（Esc）"))
         close.clicked.connect(self._close)
         head.addWidget(close)
         lay.addLayout(head)
@@ -528,7 +535,7 @@ class ResultPopup(QWidget):
         # 子類別（無字幕視窗 listen_ui.py）的元件插在這裡：標題列下面、原文框上面
         self.query_always = False  # True：「查詢」按鈕一直顯示（無字幕視窗：聽到的句子要按了才查）
         self.list_folded = False   # 單字清單收起來（無字幕視窗的「收起查詢結果」）
-        self.empty_hint = "（沒有辨識到日文；可以自己輸入，按 Enter 查）"
+        self.empty_hint = t("（沒有辨識到日文；可以自己輸入，按 Enter 查）")
 
         self.text = TextBox()
         self.text.setObjectName("text")
@@ -552,30 +559,31 @@ class ResultPopup(QWidget):
         lay.addWidget(self.trans)
         self._zh = ""  # 目前原文的譯文（記錄原句時一起存）
         self._job = None  # 目前原文的翻譯請求（背景預先翻譯的結果也在這裡）
+        self._running: dict[str, dict] = {}  # 還沒回來的翻譯請求（原文 → 請求）：同一句再查一次時接著用，不重送
 
         # 記錄原句：查完單字還是看不懂整句時，先存起來之後再查
         self.sent_row = QWidget()
         row = QHBoxLayout(self.sent_row)
         row.setContentsMargins(0, 0, 0, 0)
-        hint = self.edit_hint = QLabel("原文讀錯可以直接改，按 Enter 重查")
+        hint = self.edit_hint = QLabel(t("原文讀錯可以直接改，按 Enter 重查"))
         hint.setObjectName("status")
         hint.setWordWrap(True)
-        hint.setToolTip("修改後按 Enter（或「重查」）用改好的文字重新查字；Shift+Enter 換行。\n"
-                        "反白原文的一部分再按「記錄原句」，只記錄那一段。")
+        hint.setToolTip(t("修改後按 Enter（或「重查」）用改好的文字重新查字；Shift+Enter 換行。\n"
+                          "反白原文的一部分再按「記錄原句」，只記錄那一段。"))
         row.addWidget(hint, 1)
-        self.requery_btn = QPushButton("↻ 重查")
+        self.requery_btn = QPushButton(t("↻ 重查"))
         self.requery_btn.setFocusPolicy(Qt.NoFocus)
         self.requery_btn.setCursor(Qt.PointingHandCursor)
         self.requery_btn.clicked.connect(self._requery)
         self.requery_btn.hide()
         row.addWidget(self.requery_btn)
-        self.trans_btn = QPushButton("翻譯")
+        self.trans_btn = QPushButton(t("翻譯"))
         self.trans_btn.setFocusPolicy(Qt.NoFocus)
         self.trans_btn.setCursor(Qt.PointingHandCursor)
-        self.trans_btn.setToolTip("翻譯整句（同一句只翻一次）。設定 → 翻譯與 AI 可以改成背景預先翻好或自動翻譯。")
+        self.trans_btn.setToolTip(t("翻譯整句（同一句只翻一次）。設定 → 翻譯與 AI 可以改成背景預先翻好或自動翻譯。"))
         self.trans_btn.clicked.connect(lambda: self._translate(pin=True))
         row.addWidget(self.trans_btn)
-        self.sent_btn = QPushButton("＋ 記錄原句")
+        self.sent_btn = QPushButton(t("＋ 記錄原句"))
         self.sent_btn.setFocusPolicy(Qt.NoFocus)  # 按按鈕時不要搶走焦點，否則原文的反白會被取消
         self.sent_btn.setCursor(Qt.PointingHandCursor)
         self.sent_btn.clicked.connect(self._save_sentence)
@@ -598,7 +606,7 @@ class ResultPopup(QWidget):
         self.status.setObjectName("status")
         foot.addWidget(self.status)
         foot.addStretch(1)
-        attr = QLabel("字典：Tomoshi、維基詞典、JMdict")
+        attr = QLabel(t("字典：Tomoshi、維基詞典、JMdict"))
         attr.setObjectName("attr")
         attr.setToolTip(attribution)
         foot.addWidget(attr)
@@ -633,7 +641,7 @@ class ResultPopup(QWidget):
     def _show_mode(self):
         label, tip = MODES[self.cfg.select_mode]
         self.mode_btn.setText(label)
-        self.mode_btn.setToolTip(tip + "\n按一下切換（反白 → 框選 → 漫畫）。")
+        self.mode_btn.setToolTip(tip + "\n" + t("按一下切換（反白 → 框選 → 漫畫）。"))
 
     def set_mode(self, mode: str):
         self.cfg.select_mode = mode
@@ -673,8 +681,8 @@ class ResultPopup(QWidget):
         y = min(max(area.top(), a.y()), area.bottom() - h)
         self.move(x, y)
 
-    def show_busy(self, msg="辨識中…"):
-        self._set_title("查字")
+    def show_busy(self, msg=t("辨識中…")):
+        self._set_title(t("查字"))
         self._show_text(msg, editable=False)
         self.text.setVisible(True)
         self.texts = []
@@ -726,7 +734,7 @@ class ResultPopup(QWidget):
         self._show_text("\n".join(texts), editable=True)
         self.text.setVisible(self._text_shown() or not texts)
         self.sent_row.setVisible(self._text_shown() and bool(texts))
-        self.sent_btn.setText("＋ 記錄原句")
+        self.sent_btn.setText(t("＋ 記錄原句"))
         self._seconds = seconds
         self._render()
         self._start_translation()
@@ -737,7 +745,7 @@ class ResultPopup(QWidget):
         """啟動後先在背景畫一次（不顯示）：第一次算標題列按鈕的大小、畫日文和符號（📌、✕）時，
         Qt 要載入字型、找替代字型，約 0.3～0.6 秒，不先做的話第一次查字出結果時會卡一下。"""
         self._set_title(self.title.text() or " ")
-        probe = QLabel("日本語の文字を読み込みます。漢字ひらがなカタカナ　繁體中文的意思 N1〜N5 ＋ 記錄 📌 ✕ ↻", self)
+        probe = QLabel("日本語の文字を読み込みます。漢字ひらがなカタカナ　繁體中文的意思 N1〜N5 ＋ 記錄 📌 ✕ ↻", self)  # i18n: 不翻
         probe.adjustSize()
         probe.grab()
         probe.deleteLater()
@@ -795,36 +803,49 @@ class ResultPopup(QWidget):
         self.trans.style().polish(self.trans)
         self.trans.setText(zh)
         self.trans.setVisible(bool(zh) and self._text_shown())
-        self.trans_btn.setText("↻ 重新翻譯" if self._zh else "翻譯")
-        self.trans_btn.setToolTip("不管之前翻過的結果，重新翻譯這一句（會用一次額度），新的譯文取代舊的。" if self._zh else
-                                  "翻譯整句（同一句只翻一次）。設定 → 翻譯與 AI 可以改成背景預先翻好或自動翻譯。")
+        self.trans_btn.setText(t("↻ 重新翻譯") if self._zh else t("翻譯"))
+        self.trans_btn.setToolTip(t("不管之前翻過的結果，重新翻譯這一句（會用一次額度），新的譯文取代舊的。") if self._zh else
+                                  t("翻譯整句（同一句只翻一次）。設定 → 翻譯與 AI 可以改成背景預先翻好或自動翻譯。"))
         self.trans_btn.setEnabled(not busy)
 
     def _start_translation(self):
-        """出結果時：翻過的句子直接顯示（不花額度）；設定成背景預先翻譯／自動翻譯、原文又夠長，就先在背景翻。"""
+        """出結果時：翻過的句子直接顯示（不花額度）；設定成背景預先翻譯／自動翻譯、原文又夠長，就先在背景翻。
+        背景預先翻譯時快取裡的譯文也當成「已經預先翻好」，按「翻譯」才顯示：預先翻好的譯文會存進快取，
+        直接顯示的話同一句查第二次就會跳出沒按過翻譯的譯文（使用者 10-23 回報）。"""
         from . import ai
         src = "\n".join(self.texts)
         self._job = None
         if not src:
             return
-        hit = ai.cached_translation(src)
+        timing = self.cfg.translate_timing
+        hit = ai.cached_translation(src, ai.translate_lang(self.cfg))
         if hit is not None:
+            if timing == "prefetch":
+                self._job = {"src": src, "show": False, "done": True, "zh": hit, "err": ""}
+                return
             self._set_translation(hit)
             self._fit()
             return
-        timing = self.cfg.translate_timing
         if timing in ("prefetch", "auto") and ai.text_length(src) >= self.cfg.prefetch_min_chars:
             self._request(src, show=(timing == "auto"))
 
     def _request(self, src: str, show: bool, force: bool = False):
         """送出翻譯（同一句只送一次）。show：結果回來就顯示；背景預先翻譯時是 False，等使用者按「翻譯」。
-        force：重新翻譯（不看快取）。"""
+        force：重新翻譯（不看快取）。同一句的請求還沒回來（例如預先翻譯中又查了一次）就接著等它，不重送。"""
         from . import ai
+        job = None if force else self._running.get(src)
+        if job is not None:
+            job["show"] = job["show"] or show
+            self._job = job
+            return
         job = {"src": src, "show": show, "done": False, "zh": "", "err": ""}
         self._job = job
+        self._running[src] = job
 
         def done(zh, err):
             job.update(done=True, zh=zh or "", err=err)
+            if self._running.get(src) is job:
+                del self._running[src]
             self._job_done(job)
         ai.run_async(lambda: ai.translate(src, self.cfg, force=force), done)
 
@@ -862,7 +883,7 @@ class ResultPopup(QWidget):
         if job and job["done"]:
             self._show_job(job)
             return
-        self._set_translation("重新翻譯中…" if force else "翻譯中…", busy=True)
+        self._set_translation(t("重新翻譯中…") if force else t("翻譯中…"), busy=True)
         self._fit()
         if job:
             job["show"] = True
@@ -879,7 +900,7 @@ class ResultPopup(QWidget):
         texts = [t.strip() for t in self.text.text().splitlines() if t.strip()]
         if not texts:
             return
-        self.status.setText("重查中…")
+        self.status.setText(t("重查中…"))
         self.requery_requested.emit(texts)
         self._give_back_focus()
 
@@ -902,30 +923,30 @@ class ResultPopup(QWidget):
             self.list_lay.addWidget(WordRow(w, self.vocab.has(w), self._save, self.scale))
         if points:
             # 屬於文法句型的詞（と思った 的「思う」）不另外列成單字，在這裡看得到它在句子裡的作用
-            head = QLabel("文法")
+            head = QLabel(t("文法"))
             head.setObjectName("section")
-            head.setToolTip("句子裡的文法句型；組成句型的詞（例如「と思う」的「思う」）不另外列成單字")
+            head.setToolTip(t("句子裡的文法句型；組成句型的詞（例如「と思う」的「思う」）不另外列成單字"))
             self.list_lay.addWidget(head)
             for w in points:
                 self.list_lay.addWidget(WordRow(w, self.vocab.has(w), self._save, self.scale))
         hidden = len(self.words) - len(shown)
         if not shown:
-            empty = QLabel("（沒有符合級數條件的單字）" if self.words else "")
+            empty = QLabel(t("（沒有符合級數條件的單字）") if self.words else "")
             empty.setObjectName("status")
             self.list_lay.addWidget(empty)
         elif hidden:  # 寫在清單最後，不放標題列（標題變長會和級數選單疊在一起）
-            note = QLabel(f"另有 {hidden} 個被篩選隱藏（級數、專有名詞）")
+            note = QLabel(t("另有 {n} 個被篩選隱藏（級數、專有名詞）", n=hidden))
             note.setObjectName("status")
             self.list_lay.addWidget(note)
         self.list_lay.addStretch(1)
-        self._set_title(f"{len(words)} 個單字" + (f"・{len(points)} 文法" if points else ""))
+        self._set_title(t("{n} 個單字", n=len(words)) + (t("・{n} 文法", n=len(points)) if points else ""))
         for lb in self.findChildren(QLabel):
             if lb.textInteractionFlags() & Qt.TextSelectableByMouse:
                 lb.installEventFilter(self)
         detail = getattr(self, "_detail", "")
-        self.status.setText(f"{getattr(self, '_seconds', 0):.2f} 秒" + (f"（{detail}）" if detail else ""))
-        self.status.setToolTip("放開滑鼠到出結果實際等了多久。\n"
-                               "等版面：按下 Alt 後偵測整個畫面的文字位置還沒做完；辨識：讀字＋查字典")
+        self.status.setText(t("{n:.2f} 秒", n=getattr(self, "_seconds", 0)) + (f"（{detail}）" if detail else ""))
+        self.status.setToolTip(t("放開滑鼠到出結果實際等了多久。\n"
+                                 "等版面：按下 Alt 後偵測整個畫面的文字位置還沒做完；辨識：讀字＋查字典"))
         self._fit()
 
     def _on_vocab_changed(self):
@@ -937,7 +958,7 @@ class ResultPopup(QWidget):
     def _save(self, w: WordInfo, row: WordRow):
         self.vocab.add(w)
         row.set_saved(True)
-        self.status.setText(f"已記錄「{w.word}」")
+        self.status.setText(t("已記錄「{word}」", word=w.word))
 
     def _current_text(self) -> tuple[str, bool]:
         """(原文框現在的文字, 是不是改過還沒重查)。"""
@@ -954,10 +975,10 @@ class ResultPopup(QWidget):
             self._give_back_focus()
         zh = self._zh if not sel else ""  # 只記錄反白的一段時，整句的譯文對不上，不存
         if self.vocab.add_sentence(text, [w.word for w in self.words], zh):
-            self.sent_btn.setText("✓ 已記錄原句")
-            self.status.setText("已記錄" + ("反白的部分" if sel else "原句"))
+            self.sent_btn.setText(t("✓ 已記錄原句"))
+            self.status.setText(t("已記錄反白的部分") if sel else t("已記錄原句"))
         else:
-            self.status.setText("這句已經記錄過了")
+            self.status.setText(t("這句已經記錄過了"))
 
     def _on_filter(self):
         self.cfg.min_level = self.level.currentData()
@@ -1064,9 +1085,9 @@ class ResultPopup(QWidget):
     def contextMenuEvent(self, e):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
-        menu.addAction("開啟單字本", self.vocab_requested.emit)
-        menu.addAction("關閉視窗", self.hide)
-        menu.addAction("結束螢幕查字", self.quit_requested.emit)
+        menu.addAction(t("開啟單字本"), self.vocab_requested.emit)
+        menu.addAction(t("關閉視窗"), self.hide)
+        menu.addAction(t("結束螢幕查字"), self.quit_requested.emit)
         menu.exec(e.globalPos())
 
     # ---------------------------------------------------------------- 拖曳移動
@@ -1095,7 +1116,7 @@ def make_icon():
     f = QFont("Yu Gothic UI", 34)
     f.setBold(True)
     p.setFont(f)
-    p.drawText(pm.rect(), Qt.AlignCenter, "字")
+    p.drawText(pm.rect(), Qt.AlignCenter, "字")  # i18n: 不翻
     p.end()
     return QIcon(pm)
 

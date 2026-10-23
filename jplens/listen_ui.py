@@ -24,6 +24,7 @@ from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer,
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
+from .i18n import t
 from .ui import ResultPopup
 
 MAX_LINES = 300   # 清單最多留幾句
@@ -99,7 +100,7 @@ class Line(QLabel):
             html += f'<div style="color:#c9e3b5; font-size:12px; margin-top:2px;">{escape(self.translation)}</div>'
         self.setText(html)
         self.setProperty("partial", "true" if self.partial else "false")
-        self.setToolTip("點一下放到下面的原文框" + ("（還在講）" if self.partial else ""))
+        self.setToolTip(t("點一下放到下面的原文框") + (t("（還在講）") if self.partial else ""))
         self._polish()
 
     def set_selected(self, on: bool):
@@ -127,14 +128,14 @@ class ListenWindow(ResultPopup):
     def __init__(self, cfg, vocab, attribution: str):
         super().__init__(cfg, vocab, attribution)
         self.query_always = True
-        self.empty_hint = "（點上面的句子放到這裡；也可以自己輸入，按 Enter 查詢）"
+        self.empty_hint = t("（點上面的句子放到這裡；也可以自己輸入，按 Enter 查詢）")
         self.mode_btn.hide()  # 選取模式、釘選和無字幕無關（這個視窗本來就不會自動關）
         self.pin.hide()
         self.text_btn.hide()  # 無字幕模式一定要看得到原文框
         self.edit_hint.hide()  # 按鈕列只放按鈕，窄的視窗才不會擠在一起
-        self.requery_btn.setText("🔍 查詢")
-        self.requery_btn.setToolTip("查原文框裡這句的單字（Enter 也可以）")
-        self.title.setText("無字幕模式")
+        self.requery_btn.setText(t("🔍 查詢"))
+        self.requery_btn.setToolTip(t("查原文框裡這句的單字（Enter 也可以）"))
+        self.title.setText(t("無字幕模式"))
 
         lay = self.frame_lay
         at = lay.indexOf(self.text)
@@ -148,17 +149,17 @@ class ListenWindow(ResultPopup):
         bar.addWidget(self.state, 1)
         self.speed = QComboBox()
         for s in SPEEDS:
-            self.speed.addItem("原速" if s == 1 else f"{s:g}×", s)
+            self.speed.addItem(t("原速") if s == 1 else f"{s:g}×", s)
         self.speed.setCurrentIndex(SPEEDS.index(cfg.listen_speed) if cfg.listen_speed in SPEEDS else 0)
         self.speed.setFocusPolicy(Qt.NoFocus)
-        self.speed.setToolTip("影片的播放速度：開倍速看就選一樣的倍數（辨識前先放慢回原速，比較準）")
+        self.speed.setToolTip(t("影片的播放速度：開倍速看就選一樣的倍數（辨識前先放慢回原速，比較準）"))
         self.speed.currentIndexChanged.connect(lambda i: self.speed_changed.emit(self.speed.itemData(i)))
         bar.addWidget(self.speed, 0, Qt.AlignTop)
-        self.save_btn = QPushButton("💾 保存聲音")
+        self.save_btn = QPushButton(t("💾 保存聲音"))
         self.save_btn.setObjectName("tiny")
         self.save_btn.setFocusPolicy(Qt.NoFocus)
         self.save_btn.setCursor(Qt.PointingHandCursor)
-        self.save_btn.setToolTip("把最近 2 分鐘有聲音的部分（影片停著的時間不算）和辨識結果存下來（漏句、切錯時按，當測試資料）")
+        self.save_btn.setToolTip(t("把最近 2 分鐘有聲音的部分（影片停著的時間不算）和辨識結果存下來（漏句、切錯時按，當測試資料）"))
         self.save_btn.clicked.connect(self.save_audio_requested.emit)
         bar.addWidget(self.save_btn, 0, Qt.AlignTop)
         lay.insertLayout(at, bar)
@@ -174,7 +175,7 @@ class ListenWindow(ResultPopup):
         self.lines_lay.setContentsMargins(6, 6, 6, 6)
         self.lines_lay.setSpacing(2)
         self.lines_lay.addStretch(1)  # 句子少的時候貼在下面（最新的在最下面）
-        self.waiting = QLabel("（等待聲音…）")
+        self.waiting = QLabel(t("（等待聲音…）"))
         self.waiting.setObjectName("status")
         self.waiting.setAlignment(Qt.AlignCenter)
         self.lines_lay.addWidget(self.waiting)
@@ -224,7 +225,7 @@ class ListenWindow(ResultPopup):
             self.area.setFixedHeight(round(LIST_H * self.scale))
 
     def _set_title(self, text: str):
-        super()._set_title(text if text == "無字幕模式" else f"無字幕｜{text}")
+        super()._set_title(text if text == t("無字幕模式") else t("無字幕｜{text}", text=text))
 
     # ---------------------------------------------------------------- 查詢結果
     def show_result(self, texts, words, seconds, detail=""):
@@ -241,9 +242,9 @@ class ListenWindow(ResultPopup):
             self._show_text(sel.full, editable=True)
             if sel.translation:
                 self._set_translation(sel.translation)
-        elif job is not None and not job["done"] and job.get("line") is sel:
-            self._job = job  # 翻譯還在跑：結果回來照樣顯示在這裡
-            self._set_translation("翻譯中…", busy=True)
+        elif job is not None and job["show"] and not job["done"] and job.get("line") is sel:
+            self._job = job  # 按了翻譯、還在跑：結果回來照樣顯示在這裡（背景預先翻譯的不算，不然會卡在「翻譯中…」）
+            self._set_translation(t("翻譯中…"), busy=True)
         elif sel.translation and not self._zh:
             self._set_translation(sel.translation)
         self._fit()
@@ -258,8 +259,8 @@ class ListenWindow(ResultPopup):
         n_words = sum(not w.is_grammar for w in shown)
         n_gram = len(shown) - n_words
         q = self._queried if len(self._queried) <= 12 else self._queried[:11] + "…"
-        what = f"「{q}」{n_words} 個單字" + (f"・{n_gram} 文法" if n_gram else "")
-        self.fold_btn.setText(f"▸ 展開查詢結果（{what}）" if self.list_folded else f"▾ 收起查詢結果（{what}）")
+        what = t("「{q}」{n} 個單字", q=q, n=n_words) + (t("・{n} 文法", n=n_gram) if n_gram else "")
+        self.fold_btn.setText(t("▸ 展開查詢結果（{what}）", what=what) if self.list_folded else t("▾ 收起查詢結果（{what}）", what=what))
         self.fold_btn.setVisible(bool(self.words))
 
     def _toggle_fold(self):
@@ -321,12 +322,12 @@ class ListenWindow(ResultPopup):
         self.words, self.texts = [], []
         self._clear_list()
         self.fold_btn.hide()
-        self._set_title("無字幕模式")
+        self._set_title(t("無字幕模式"))
         self._show_text("", editable=True)
         self.text.setVisible(True)
         self.sent_row.setVisible(True)  # 沒有句子時也可以自己輸入再按查詢
-        self.status.setText(f"{hotkey_name} 或 ✕ 結束")
-        self.set_state("載入語音辨識…", False)
+        self.status.setText(t("{key} 或 ✕ 結束", key=hotkey_name))
+        self.set_state(t("載入語音辨識…"), False)
         if not self.isVisible():
             self.place()
         self.show()
@@ -370,7 +371,7 @@ class ListenWindow(ResultPopup):
             if self._pending and self._pending[1] is line:
                 self._pending = None
                 self._set_translation("")
-                self.status.setText("那句沒有辨識出文字")
+                self.status.setText(t("那句沒有辨識出文字"))
             if line is self._sel:
                 self._sel = None
             return
@@ -402,7 +403,7 @@ class ListenWindow(ResultPopup):
         self._show_text(line.full, editable=True)
         self.text.setVisible(True)  # 「文」按鈕關掉時原文框也要看得到（無字幕模式就是看原文）
         self.sent_row.setVisible(True)
-        self.sent_btn.setText("＋ 記錄原句")
+        self.sent_btn.setText(t("＋ 記錄原句"))
         if line.translation:
             self._set_translation(line.translation)
         self._fit()
@@ -441,9 +442,9 @@ class ListenWindow(ResultPopup):
             return False
         self._pending = (what, line)
         if what == "translate":
-            self._set_translation("這句講完就翻譯…", busy=True)
+            self._set_translation(t("這句講完就翻譯…"), busy=True)
         else:
-            self.status.setText("這句講完就查詢…")
+            self.status.setText(t("這句講完就查詢…"))
         self._fit()
         return True
 
@@ -497,7 +498,7 @@ class ListenWindow(ResultPopup):
             self._show_newer()
 
     def _show_newer(self):
-        self.newer.setText(f"↓ 有 {self._unseen} 句新的，回到最新" if self._unseen else "↓ 回到最新")
+        self.newer.setText(t("↓ 有 {n} 句新的，回到最新", n=self._unseen) if self._unseen else t("↓ 回到最新"))
         if self.newer.isVisible() != (not self._follow):
             self.newer.setVisible(not self._follow)
             self._fit()

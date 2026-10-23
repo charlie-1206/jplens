@@ -5,6 +5,7 @@
 """
 
 import html
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -16,42 +17,43 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QStackedWidget,
                                QStyle, QStyledItemDelegate, QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from . import speech
+from . import lang, speech
+from .i18n import t
 from .theme import C, LEVEL_BG, QSS, badge_style, dark_title_bar, icon
 from .vocab import key_of, one_line
 
-VIEWS = {"words": "單字", "grammar": "文法", "sentences": "句子"}
-LEVELS = ["N5", "N4", "N3", "N2", "N1", "級外"]
+VIEWS = {"words": t("單字"), "grammar": t("文法"), "sentences": t("句子")}
+LEVELS = ["N5", "N4", "N3", "N2", "N1", "級外"]  # i18n: 不翻
 LEVEL_RANK = {"N1": 0, "N2": 1, "N3": 2, "N4": 3, "N5": 4}
-POS_CATS = ["名詞", "動詞", "形容詞", "副詞", "慣用語"]
-DATE_OPTS = [("all", "全部"), ("today", "今天"), ("7", "7 天內"), ("30", "30 天內")]
-STATUS_OPTS = [("all", "全部"), ("learning", "學習中"), ("learned", "已學會")]
-MARK_OPTS = [("all", "全部"), ("marked", "只看重點單字")]
-SORTS = [("new", "最新記錄"), ("old", "最早記錄"), ("level", "級數（難到易）"), ("kana", "五十音")]
+POS_CATS = ["名詞", "動詞", "形容詞", "副詞", "慣用語"]  # i18n: 不翻
+DATE_OPTS = [("all", t("全部")), ("today", t("今天")), ("7", t("7 天內")), ("30", t("30 天內"))]
+STATUS_OPTS = [("all", t("全部")), ("learning", t("學習中")), ("learned", t("已學會"))]
+MARK_OPTS = [("all", t("全部")), ("marked", t("只看重點單字"))]
+SORTS = [("new", t("最新記錄")), ("old", t("最早記錄")), ("level", t("級數（難到易）")), ("kana", t("五十音"))]
 MAX_TAGS = 6  # 句子卡片最多列幾個單字標籤
 
 
 # ---------------------------------------------------------------- 小工具
 def is_grammar(rec: dict) -> bool:
-    return rec.get("pos") == "文法"
+    return rec.get("pos") == "文法"  # i18n: 不翻
 
 
 def level_of(rec: dict) -> str:
     lv = rec.get("jlpt", "")
-    return lv if lv in LEVEL_RANK else "級外"  # 專有名詞也算級外
+    return lv if lv in LEVEL_RANK else "級外"  # 專有名詞也算級外  # i18n: 不翻
 
 
 def pos_cat(pos: str) -> str:
-    if pos.startswith("名詞"):
-        return "名詞"
-    if "動詞" in pos:
-        return "動詞"
-    if "形容" in pos:
-        return "形容詞"
-    if pos == "副詞":
-        return "副詞"
-    if pos in ("慣用語", "複合詞"):
-        return "慣用語"
+    if pos.startswith("名詞"):  # i18n: 不翻
+        return "名詞"  # i18n: 不翻
+    if "動詞" in pos:  # i18n: 不翻
+        return "動詞"  # i18n: 不翻
+    if "形容" in pos:  # i18n: 不翻
+        return "形容詞"  # i18n: 不翻
+    if pos == "副詞":  # i18n: 不翻
+        return "副詞"  # i18n: 不翻
+    if pos in ("慣用語", "複合詞"):  # i18n: 不翻
+        return "慣用語"  # i18n: 不翻
     return pos
 
 
@@ -67,21 +69,38 @@ def days_ago(saved_at: str) -> int:
     return (date.today() - t.date()).days if t else 10 ** 6
 
 
+def meaning_summary(rec: dict, store) -> str:
+    """收合卡片上的一行意思：解釋的語言優先（lang.rec_meanings），中文模式只有英文時標〔英〕；後面接也讀的意思。"""
+    mean, fallback = lang.rec_meanings(rec)
+    sep = "; " if lang.english() or fallback else "；"
+    head = (t("〔英〕") if fallback else "") + sep.join(mean)
+    return ("; " if lang.english() else "；").join(([head] if mean else []) + store.also_display(rec))
+
+
+def meaning_field() -> str:
+    """編輯、手動新增單字時改的是哪一個意思欄位（解釋的語言）。"""
+    return "meaning_en" if lang.english() else "meaning_zh"
+
+
+def meaning_title() -> str:
+    return t("英文意思") if lang.english() else t("中文意思")
+
+
 def date_text(saved_at: str) -> str:
-    t = _parse(saved_at)
-    if not t:
+    dt = _parse(saved_at)
+    if not dt:
         return ""
-    d = (date.today() - t.date()).days
+    d = (date.today() - dt.date()).days
     if d == 0:
-        return "今天 " + t.strftime("%H:%M")
+        return t("今天 {time}", time=dt.strftime("%H:%M"))
     if d == 1:
-        return "昨天 " + t.strftime("%H:%M")
-    return t.strftime("%m/%d" if t.year == date.today().year else "%Y/%m/%d")
+        return t("昨天 {time}", time=dt.strftime("%H:%M"))
+    return dt.strftime("%m/%d" if dt.year == date.today().year else "%Y/%m/%d")
 
 
 def kana_key(s: str) -> str:
     """五十音排序用：片假名換成平假名。"""
-    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)  # i18n: 不翻
 
 
 def highlight(sentence: str, word: str) -> str:
@@ -90,7 +109,7 @@ def highlight(sentence: str, word: str) -> str:
     w = word.lstrip("〜～")
     for k in range(len(w), 0, -1):
         part = w[:k]
-        if k < len(w) and not any("一" <= c <= "鿿" for c in part) and k < 2:
+        if k < len(w) and not any("一" <= c <= "鿿" for c in part) and k < 2:  # i18n: 不翻
             break  # 只剩一個假名，太容易誤標
         i = text.find(part)
         if i >= 0:
@@ -224,7 +243,7 @@ class WordCard(QFrame):
         star.setIconSize(QSize(20, 20))
         star.setFixedSize(40, 44)
         star.setCursor(Qt.PointingHandCursor)
-        star.setToolTip("取消重點單字" if marked else "設為重點單字（匯出時標成 App 的重點）")
+        star.setToolTip(t("取消重點單字") if marked else t("設為重點單字（匯出時標成 App 的重點）"))
         star.clicked.connect(lambda: self.win.set_flag(self, "marked", not marked))
         head.addWidget(star, 0, Qt.AlignTop)
 
@@ -242,22 +261,20 @@ class WordCard(QFrame):
         if reading and reading != rec.get("word"):
             # 也讀（記錄時結果視窗的「也讀」）直接接在讀音後面：よう；かなめ
             top.addWidget(ElidedLabel(self.win.store.reading_with_also(rec), "reading", natural=True), 0, Qt.AlignBottom)
-        if expanded and rec.get("pos") != "文法":  # 文法句型（〜であれ／〜であろうと）不是一個能唸的詞
-            top.addWidget(_speak_button(f"朗讀「{speech.word_text(rec)}」",
+        if expanded and rec.get("pos") != "文法":  # 文法句型（〜であれ／〜であろうと）不是一個能唸的詞  # i18n: 不翻
+            top.addWidget(_speak_button(t("朗讀「{word}」", word=speech.word_text(rec)),
                                         lambda: self.win.speak(speech.word_text(self.rec))), 0, Qt.AlignVCenter)
         lv = rec.get("jlpt", "")
         if lv:
-            badge = QLabel(lv)
+            badge = QLabel(t(lv))
             badge.setStyleSheet(badge_style(lv))
             top.addWidget(badge, 0, Qt.AlignVCenter)
-        top.addWidget(_label(rec.get("pos", ""), "dim"), 0, Qt.AlignVCenter)
+        top.addWidget(_label(t(rec.get("pos", "")), "dim"), 0, Qt.AlignVCenter)
         if learned:
-            top.addWidget(_label("✓ 已學會", "learned"), 0, Qt.AlignVCenter)
+            top.addWidget(_label(t("✓ 已學會"), "learned"), 0, Qt.AlignVCenter)
         top.addStretch(1)
         col.addLayout(top)
-        zh = rec.get("meaning_zh") or []
-        summary = ElidedLabel("；".join((["；".join(zh) if zh else "〔英〕" + "; ".join(rec.get("meaning_en") or [])])
-                                       + self.win.store.also_meanings(rec)))
+        summary = ElidedLabel(meaning_summary(rec, self.win.store))
         summary.setObjectName("summary")
         col.addWidget(summary)
         row.addLayout(col, 1)
@@ -277,9 +294,10 @@ class WordCard(QFrame):
         v.setContentsMargins(14, 10, 14, 12)
         v.setSpacing(10)
         zh, en = rec.get("meaning_zh") or [], rec.get("meaning_en") or []
+        main, _ = lang.rec_meanings(rec)
         senses = QVBoxLayout()
         senses.setSpacing(4)
-        for i, m in enumerate(zh or en, 1):
+        for i, m in enumerate(main, 1):
             line = QHBoxLayout()
             num = _label(str(i), "dim")
             num.setFixedWidth(16)
@@ -287,11 +305,12 @@ class WordCard(QFrame):
             line.addWidget(num, 0, Qt.AlignTop)
             line.addWidget(_label(m, "meaning", wrap=True, select=True), 1)
             senses.addLayout(line)
-        if zh and en:
-            e = _label("英：" + " / ".join(en), "en", wrap=True, select=True)
+        if zh and en:  # 另一種語言的意思用小字列在下面
+            e = (_label(t("中：{meanings}", meanings="；".join(zh)), "en", wrap=True, select=True) if lang.english()
+                 else _label(t("英：{meanings}", meanings=" / ".join(en)), "en", wrap=True, select=True))
             e.setContentsMargins(22, 0, 0, 0)
             senses.addWidget(e)
-        for m in self.win.store.also_meanings(rec):
+        for m in self.win.store.also_display(rec):
             a = _label(m, "meaning", wrap=True, select=True)
             a.setContentsMargins(22, 0, 0, 0)
             senses.addWidget(a)
@@ -304,8 +323,8 @@ class WordCard(QFrame):
             qv.setSpacing(4)
             head = QHBoxLayout()
             head.setSpacing(4)
-            head.addWidget(_label("原句", "note"))
-            head.addWidget(_speak_button("朗讀原句", lambda: self.win.speak(self.rec.get("sentence", ""))))
+            head.addWidget(_label(t("原句"), "note"))
+            head.addWidget(_speak_button(t("朗讀原句"), lambda: self.win.speak(self.rec.get("sentence", ""))))
             head.addStretch(1)
             qv.addLayout(head)
             s = _label(highlight(rec["sentence"], rec.get("word", "")), "jp", wrap=True, select=True)
@@ -314,14 +333,15 @@ class WordCard(QFrame):
             v.addWidget(q)
         acts = QHBoxLayout()
         acts.setSpacing(8)
-        t = _parse(rec.get("saved_at", ""))
-        acts.addWidget(ElidedLabel("記錄於 " + t.strftime("%Y-%m-%d %H:%M") if t else "", "dim", natural=True), 1)
+        saved = _parse(rec.get("saved_at", ""))
+        acts.addWidget(ElidedLabel(t("記錄於 {time}", time=saved.strftime("%Y-%m-%d %H:%M")) if saved else "", "dim",
+                                   natural=True), 1)
         acts.addStretch(1)
-        acts.addWidget(_button("取消已學會" if learned else "標記已學會", "learnedBtn" if learned else None,
+        acts.addWidget(_button(t("取消已學會") if learned else t("標記已學會"), "learnedBtn" if learned else None,
                                lambda: self.win.set_flag(self, "learned", not learned)))
-        acts.addWidget(_button("編輯", slot=lambda: self.win.edit(self.rec)))
-        acts.addWidget(_button("複製", slot=lambda: self.win.copy_word(self.rec)))
-        acts.addWidget(_button("刪除", "danger", lambda: self.win.delete(self.rec)))
+        acts.addWidget(_button(t("編輯"), slot=lambda: self.win.edit(self.rec)))
+        acts.addWidget(_button(t("複製"), slot=lambda: self.win.copy_word(self.rec)))
+        acts.addWidget(_button(t("刪除"), "danger", lambda: self.win.delete(self.rec)))
         v.addLayout(acts)
         return d
 
@@ -382,12 +402,12 @@ class CardDelegate(QStyledItemDelegate):
             lb.ensurePolished()
             s = lb.sizeHint()
             return QFont(lb.font()), s.width() - QFontMetrics(lb.font()).horizontalAdvance(text), s.height()
-        self.f_word, _, self.top_h = label("word", text="字")
-        self.f_reading, _, self.reading_h = label("reading", text="よ")
+        self.f_word, _, self.top_h = label("word", text="字")  # i18n: 不翻
+        self.f_reading, _, self.reading_h = label("reading", text="よ")  # i18n: 不翻
         self.f_summary = label("summary")[0]
         self.f_dim, _, self.dim_h = label("dim")
         self.f_badge, self.badge_pad, self.badge_h = label(style=badge_style("N1"))
-        self.f_learned, self.learned_pad, self.learned_h = label("learned", text="✓ 已學會")
+        self.f_learned, self.learned_pad, self.learned_h = label("learned", text=t("✓ 已學會"))
         probe.deleteLater()
         self.sum_h = QFontMetrics(self.f_summary).height() + 2  # ElidedLabel.sizeHint
         self.card_h = 2 + max(44, 9 + self.top_h + 2 + self.sum_h + 9)  # 上下邊框各 1
@@ -418,9 +438,7 @@ class CardDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), (h if h is not None else self.card_h) + self.row_extra(row))
 
     def summary_text(self, rec: dict) -> str:
-        zh = rec.get("meaning_zh") or []
-        return "；".join((["；".join(zh) if zh else "〔英〕" + "; ".join(rec.get("meaning_en") or [])])
-                        + self.win.store.also_meanings(rec))
+        return meaning_summary(rec, self.win.store)
 
     def _layout(self, rec: dict, card: QRect):
         """收合卡片裡各部分的位置與內容：[(種類, 矩形, 文字)]，paint 和 tooltip 共用。"""
@@ -449,16 +467,16 @@ class CardDelegate(QStyledItemDelegate):
             x += w + 8
         lv = rec.get("jlpt", "")
         if lv:
-            w, h = QFontMetrics(self.f_badge).horizontalAdvance(lv) + self.badge_pad, self.badge_h
+            w, h = QFontMetrics(self.f_badge).horizontalAdvance(t(lv)) + self.badge_pad, self.badge_h
             items.append(("badge", QRect(x, top + (self.top_h - h) // 2, w, h), lv))
             x += w + 8
-        pos = rec.get("pos", "")
+        pos = t(rec.get("pos", ""))
         if pos:
             w, h = QFontMetrics(self.f_dim).horizontalAdvance(pos), self.dim_h
             items.append(("pos", QRect(x, top + (self.top_h - h) // 2, w, h), pos))
             x += w + 8
         if rec.get("learned"):
-            text = "✓ 已學會"
+            text = t("✓ 已學會")
             w, h = QFontMetrics(self.f_learned).horizontalAdvance(text) + self.learned_pad, self.learned_h
             items.append(("learned", QRect(x, top + (self.top_h - h) // 2, w, h), text))
         items.append(("summary", QRect(x0, top + self.top_h + 2, max(col_right - x0, 0), self.sum_h), self.summary_text(rec)))
@@ -499,7 +517,7 @@ class CardDelegate(QStyledItemDelegate):
                 p.drawRoundedRect(QRectF(r), 3, 3)
                 p.setFont(self.f_badge)
                 p.setPen(QColor("white"))
-                p.drawText(r, Qt.AlignCenter, text)
+                p.drawText(r, Qt.AlignCenter, t(text))
             elif kind == "pos":
                 p.setFont(self.f_dim)
                 p.setPen(QColor(C["dim"]))
@@ -555,7 +573,7 @@ class CardDelegate(QStyledItemDelegate):
         pos = event.pos()
         tip = ""
         if self._star_rect(card).contains(pos):
-            tip = "取消重點單字" if rec.get("marked") else "設為重點單字（匯出時標成 App 的重點）"
+            tip = t("取消重點單字") if rec.get("marked") else t("設為重點單字（匯出時標成 App 的重點）")
         else:
             for kind, r, text in self._layout(rec, card)[0]:
                 if kind == "summary" and r.contains(pos):
@@ -628,13 +646,13 @@ class SentenceCard(QFrame):
         # 講解（Gemini，ai.py）：第一次按才呼叫，結果存進句子紀錄，之後只是展開／收合
         key = (rec.get("text", ""), rec.get("saved_at", ""))
         has, busy, opened = bool(rec.get("explanation")), key in win.explaining, key in win.explain_open
-        label = "講解中…" if busy else ("收合講解" if has and opened else "講解" if not has else "展開講解")
+        label = t("講解中…") if busy else (t("收合講解") if has and opened else t("講解") if not has else t("展開講解"))
         btn = _button(label, slot=lambda: win.explain_sentence(rec),
-                      tip="用 Gemini 講解這句：翻譯、拆解詞與文法、語氣。模型在設定 → 翻譯與 AI 選。")
+                      tip=t("用 Gemini 講解這句：翻譯、拆解詞與文法、語氣。模型在設定 → 翻譯與 AI 選。"))
         btn.setEnabled(not busy)
         row.addWidget(btn)
-        row.addWidget(_button("複製", slot=lambda: win.copy_sentence(rec)))
-        row.addWidget(_button("刪除", "danger", lambda: win.delete_sentence(rec)))
+        row.addWidget(_button(t("複製"), slot=lambda: win.copy_sentence(rec)))
+        row.addWidget(_button(t("刪除"), "danger", lambda: win.delete_sentence(rec)))
         v.addLayout(row)
         err = win.explain_errors.get(key)
         if err:
@@ -653,10 +671,10 @@ class SentenceCard(QFrame):
             foot = QHBoxLayout()
             from .ai import EXPLAIN_MODELS
             model = rec.get("explain_model", "")
-            foot.addWidget(_label(EXPLAIN_MODELS.get(model, model).split("（")[0], "dim"))
+            foot.addWidget(_label(re.split(r"（| \(", EXPLAIN_MODELS.get(model, model))[0], "dim"))
             foot.addStretch(1)
-            foot.addWidget(_button("重新講解", slot=lambda: win.explain_sentence(rec, again=True),
-                                   tip="用目前設定的模型再講解一次（會蓋掉這份講解）"))
+            foot.addWidget(_button(t("重新講解"), slot=lambda: win.explain_sentence(rec, again=True),
+                                   tip=t("用目前設定的模型再講解一次（會蓋掉這份講解）")))
             bl.addLayout(foot)
             v.addWidget(box)
 
@@ -684,17 +702,17 @@ class FilterPanel(QWidget):
         _clear(self.lay)
         f, cards = self.win.f, self.win.view != "sentences"
         if cards:
-            self._section("級數（可複選）", [(lv, lv) for lv in LEVELS], f["levels"], multi=True)
+            self._section(t("級數（可複選）"), [(lv, t(lv)) for lv in LEVELS], f["levels"], multi=True)
             if self.win.view == "words":
-                self._section("詞性（可複選）", [(p, p) for p in POS_CATS], f["pos"], multi=True)
-        self._section("記錄時間", DATE_OPTS, f, key="date")
+                self._section(t("詞性（可複選）"), [(p, t(p)) for p in POS_CATS], f["pos"], multi=True)
+        self._section(t("記錄時間"), DATE_OPTS, f, key="date")
         if cards:
-            self._section("狀態", STATUS_OPTS, f, key="status")
-            self._section("重點單字", MARK_OPTS, f, key="marked")
+            self._section(t("狀態"), STATUS_OPTS, f, key="status")
+            self._section(t("重點單字"), MARK_OPTS, f, key="marked")
         foot = QHBoxLayout()
-        foot.addWidget(_button("清除條件", "plain", self._clear_all))
+        foot.addWidget(_button(t("清除條件"), "plain", self._clear_all))
         foot.addStretch(1)
-        foot.addWidget(_button("完成", "primary", self.close))
+        foot.addWidget(_button(t("完成"), "primary", self.close))
         self.lay.addWidget(_sep())
         self.lay.addLayout(foot)
         self.adjustSize()
@@ -738,21 +756,21 @@ class ExportDialog(QDialog):
         super().__init__(parent)
         self.kind, self.store, self.cfg = kind, store, cfg
         words = kind == "words"
-        self.setWindowTitle("匯出單字 App 備份檔" if words else "匯出句子")
+        self.setWindowTitle(t("匯出單字 App 備份檔") if words else t("匯出句子"))
         self.setStyleSheet(QSS)
         self.setMinimumWidth(480)
         recs = store.records() if words else store.sentences()
-        self.scopes = [("all", "全部記錄（單字＋文法）" if words else "全部句子", recs)]
+        self.scopes = [("all", t("全部記錄（單字＋文法）") if words else t("全部句子"), recs)]
         if filtered is not None:
-            self.scopes.append(("filtered", "目前畫面的搜尋、篩選結果", filtered))
+            self.scopes.append(("filtered", t("目前畫面的搜尋、篩選結果"), filtered))
         if words:
-            self.scopes.append(("marked", "只匯出重點單字", [r for r in recs if r.get("marked")]))
-        self.unit = " 個" if words else " 句"
+            self.scopes.append(("marked", t("只匯出重點單字"), [r for r in recs if r.get("marked")]))
+        self.unit = t(" 個") if words else t(" 句")  # app.py 的匯出完成訊息也用
 
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 14)
         v.setSpacing(12)
-        v.addWidget(_label("匯出範圍", "desc"))
+        v.addWidget(_label(t("匯出範圍"), "desc"))
         self.group = QButtonGroup(self)
         self.radios = []
         default = cfg.export_scope if words else "all"
@@ -765,7 +783,7 @@ class ExportDialog(QDialog):
             v.addWidget(rb)
         if self.group.checkedId() < 0:
             self.radios[0][0].setChecked(True)
-        self.learned = QCheckBox("已學會的單字也匯出")
+        self.learned = QCheckBox(t("已學會的單字也匯出"))
         self.learned.setChecked(cfg.export_learned)
         self.learned.toggled.connect(self._update)
         self.hint = _label("", "summary", wrap=True)
@@ -781,21 +799,21 @@ class ExportDialog(QDialog):
             v.addWidget(self.learned)
             v.addWidget(hint_box)
         else:
-            v.addWidget(_label("每行一句，依記錄順序編號（1. 2. 3.）。", "desc"))
-        v.addWidget(_label("儲存位置", "desc"))
+            v.addWidget(_label(t("每行一句，依記錄順序編號（1. 2. 3.）。"), "desc"))
+        v.addWidget(_label(t("儲存位置"), "desc"))
         prow = QHBoxLayout()
         stamp = datetime.now().strftime("%Y%m%d")
         name = f"vocabulary_{stamp}.txt" if words else f"sentences_{stamp}.txt"
         self.path = QLineEdit(str(store.path.parent / name))
         self.path.setObjectName("path")
         prow.addWidget(self.path, 1)
-        prow.addWidget(_button("變更…", slot=self._browse))
+        prow.addWidget(_button(t("變更…"), slot=self._browse))
         v.addLayout(prow)
         v.addSpacing(4)
         foot = QHBoxLayout()
         foot.addStretch(1)
-        foot.addWidget(_button("取消", slot=self.reject))
-        self.ok = _button("匯出", "primary", self._export)
+        foot.addWidget(_button(t("取消"), slot=self.reject))
+        self.ok = _button(t("匯出"), "primary", self._export)
         self.ok.setDefault(True)
         foot.addWidget(self.ok)
         v.addLayout(foot)
@@ -815,12 +833,12 @@ class ExportDialog(QDialog):
             rb.setText(f"{text}　{len(self._filter(recs))}{self.unit}")
         sel = self._selected()
         marked = sum(1 for r in sel if r.get("marked"))
-        self.hint.setText(f"其中重點單字 {marked} 個。")
-        self.ok.setText(f"匯出 {len(sel)}{self.unit}")
+        self.hint.setText(t("其中重點單字 {n} 個。", n=marked))
+        self.ok.setText(t("匯出 {count}{unit}", count=len(sel), unit=self.unit))
         self.ok.setEnabled(bool(sel))
 
     def _browse(self):
-        path, _ = QFileDialog.getSaveFileName(self, self.windowTitle(), self.path.text(), "文字檔 (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(self, self.windowTitle(), self.path.text(), t("文字檔 (*.txt)"))
         if path:
             self.path.setText(path)
 
@@ -828,7 +846,8 @@ class ExportDialog(QDialog):
         path = Path(self.path.text().strip())
         if not path.name:
             return
-        if path.exists() and QMessageBox.question(self, self.windowTitle(), f"{path.name} 已經存在，要覆蓋嗎？") \
+        if path.exists() and QMessageBox.question(self, self.windowTitle(),
+                                                         t("{name} 已經存在，要覆蓋嗎？", name=path.name)) \
                 != QMessageBox.Yes:
             return
         sel = self._selected()
@@ -840,7 +859,7 @@ class ExportDialog(QDialog):
             else:
                 self.count = self.store.export_sentences(path, sel)
         except OSError as e:
-            QMessageBox.warning(self, self.windowTitle(), f"存檔失敗：{e}")
+            QMessageBox.warning(self, self.windowTitle(), t("存檔失敗：{err}", err=e))
             return
         self.out = path
         self.accept()
@@ -849,7 +868,7 @@ class ExportDialog(QDialog):
 class EditDialog(QDialog):
     def __init__(self, parent, rec: dict):
         super().__init__(parent)
-        self.setWindowTitle(f"編輯「{rec.get('word', '')}」")
+        self.setWindowTitle(t("編輯「{word}」", word=rec.get("word", "")))
         self.setStyleSheet(QSS)
         self.setMinimumWidth(480)
         v = QVBoxLayout(self)
@@ -857,12 +876,13 @@ class EditDialog(QDialog):
         v.setSpacing(6)
         self.word = QLineEdit(rec.get("word", ""))
         self.reading = QLineEdit(rec.get("reading", ""))
-        self.zh = QPlainTextEdit("\n".join(rec.get("meaning_zh") or []))
+        self.field = meaning_field()  # 解釋的語言是英文時改的是英文意思
+        self.zh = QPlainTextEdit("\n".join(rec.get(self.field) or []))
         self.zh.setFixedHeight(96)
         self.sentence = QPlainTextEdit(rec.get("sentence", ""))
         self.sentence.setFixedHeight(72)
-        for title, w, tip in (("單字", self.word, ""), ("讀音", self.reading, ""),
-                              ("中文意思", self.zh, "一行一個意思"), ("原句", self.sentence, "")):
+        for title, w, tip in ((t("單字"), self.word, ""), (t("讀音"), self.reading, ""),
+                              (meaning_title(), self.zh, t("一行一個意思")), (t("原句"), self.sentence, "")):
             row = QHBoxLayout()
             row.addWidget(_label(title, "desc"))
             if tip:
@@ -873,15 +893,15 @@ class EditDialog(QDialog):
             v.addSpacing(4)
         foot = QHBoxLayout()
         foot.addStretch(1)
-        foot.addWidget(_button("取消", slot=self.reject))
-        ok = _button("儲存", "primary", self.accept)
+        foot.addWidget(_button(t("取消"), slot=self.reject))
+        ok = _button(t("儲存"), "primary", self.accept)
         ok.setDefault(True)
         foot.addWidget(ok)
         v.addLayout(foot)
 
     def values(self) -> dict:
         return {"word": self.word.text().strip(), "reading": self.reading.text().strip(),
-                "meaning_zh": [ln.strip() for ln in self.zh.toPlainText().splitlines() if ln.strip()],
+                self.field: [ln.strip() for ln in self.zh.toPlainText().splitlines() if ln.strip()],
                 "sentence": self.sentence.toPlainText().strip()}
 
 
@@ -891,49 +911,49 @@ class AddWordDialog(QDialog):
     def __init__(self, parent, dictionary):
         super().__init__(parent)
         self.dictionary = dictionary
-        self.setWindowTitle("新增單字")
+        self.setWindowTitle(t("新增單字"))
         self.setStyleSheet(QSS)
         self.setMinimumWidth(480)
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 14)
         v.setSpacing(6)
-        v.addWidget(_label("單字", "desc"))
+        v.addWidget(_label(t("單字"), "desc"))
         row = QHBoxLayout()
         self.word = QLineEdit()
-        self.word.setPlaceholderText("例：乗っかる（動詞打辭書形或活用形都可以）")
+        self.word.setPlaceholderText(t("例：乗っかる（動詞打辭書形或活用形都可以）"))
         self.word.returnPressed.connect(self.lookup)
         row.addWidget(self.word, 1)
-        row.addWidget(_button("查字典", slot=self.lookup))
+        row.addWidget(_button(t("查字典"), slot=self.lookup))
         v.addLayout(row)
         self.status = _label("", "dim", wrap=True)
         v.addWidget(self.status)
         grid = QHBoxLayout()
         self.reading, self.pos = QLineEdit(), QLineEdit()
         self.level = QComboBox()
-        for lv in ["級外", "N5", "N4", "N3", "N2", "N1"]:
-            self.level.addItem(lv)
-        for title, w in (("讀音", self.reading), ("詞性", self.pos), ("級數", self.level)):
+        for lv in ["級外", "N5", "N4", "N3", "N2", "N1"]:  # i18n: 不翻
+            self.level.addItem(t(lv))
+        for title, w in ((t("讀音"), self.reading), (t("詞性"), self.pos), (t("級數"), self.level)):
             col = QVBoxLayout()
             col.addWidget(_label(title, "desc"))
             col.addWidget(w)
             grid.addLayout(col, 2 if w is self.reading else 1)
         v.addLayout(grid)
         row = QHBoxLayout()
-        row.addWidget(_label("中文意思", "desc"))
-        row.addWidget(_label("一行一個意思", "dim"))
+        row.addWidget(_label(meaning_title(), "desc"))
+        row.addWidget(_label(t("一行一個意思"), "dim"))
         row.addStretch(1)
         v.addLayout(row)
         self.zh = QPlainTextEdit()
         self.zh.setFixedHeight(96)
         v.addWidget(self.zh)
-        v.addWidget(_label("原句（可以空白）", "desc"))
+        v.addWidget(_label(t("原句（可以空白）"), "desc"))
         self.sentence = QPlainTextEdit()
         self.sentence.setFixedHeight(60)
         v.addWidget(self.sentence)
         foot = QHBoxLayout()
         foot.addStretch(1)
-        foot.addWidget(_button("取消", slot=self.reject))
-        self.ok = _button("新增", "primary", self.accept)
+        foot.addWidget(_button(t("取消"), slot=self.reject))
+        self.ok = _button(t("新增"), "primary", self.accept)
         foot.addWidget(self.ok)
         v.addLayout(foot)
         self._en: list[str] = []
@@ -947,25 +967,27 @@ class AddWordDialog(QDialog):
         infos = [w for w in extract([text], self.dictionary) if not w.is_grammar]
         info = next((w for w in infos if w.word == text), infos[0] if infos else None)
         if info is None:
-            self.status.setText("字典裡找不到，請自己填讀音和意思。")
+            self.status.setText(t("字典裡找不到，請自己填讀音和意思。"))
             return
         if info.word != text:
             self.word.setText(info.word)  # 活用形換成辭書形（乗っかった → 乗っかる）
         self.reading.setText(info.reading)
         self.pos.setText(info.pos)
-        self.level.setCurrentText(info.jlpt if info.jlpt in ("N5", "N4", "N3", "N2", "N1") else "級外")
-        self.zh.setPlainText("\n".join(info.zh))
+        self.level.setCurrentText(info.jlpt if info.jlpt in ("N5", "N4", "N3", "N2", "N1") else t("級外"))
         self._en = info.en or ([info.jlpt_en] if info.jlpt_en else [])
+        self.zh.setPlainText("\n".join(self._en if lang.english() else info.zh))
         self._also = [[rd, mean] for rd, mean in info.also]
-        more = f"（同一段文字還有：{'、'.join(w.word for w in infos if w is not info)}）" if len(infos) > 1 else ""
-        self.status.setText(f"已從字典填入「{info.word}」{more}")
+        more = (t("（同一段文字還有：{words}）", words="、".join(w.word for w in infos if w is not info))
+                if len(infos) > 1 else "")
+        self.status.setText(t("已從字典填入「{word}」{more}", word=info.word, more=more))
 
     def record(self) -> dict:
         lv = self.level.currentText()
+        lines = [ln.strip() for ln in self.zh.toPlainText().splitlines() if ln.strip()]
         return {"word": self.word.text().strip(), "reading": self.reading.text().strip() or self.word.text().strip(),
-                "pos": self.pos.text().strip(), "jlpt": "" if lv == "級外" else lv,
-                "meaning_zh": [ln.strip() for ln in self.zh.toPlainText().splitlines() if ln.strip()],
-                "meaning_en": self._en, "sentence": self.sentence.toPlainText().strip(), "also": self._also}
+                "pos": self.pos.text().strip(), "jlpt": "" if lv == t("級外") else lv,
+                "meaning_zh": [] if lang.english() else lines, "meaning_en": lines if lang.english() else self._en,
+                "sentence": self.sentence.toPlainText().strip(), "also": self._also}
 
 
 # ---------------------------------------------------------------- 視窗
@@ -979,7 +1001,7 @@ class ManagerWindow(QWidget):
         self.setObjectName("window")
         self.setStyleSheet(QSS)
         self.setWindowIcon(make_icon())
-        self.setWindowTitle("單字本 — 螢幕查字")
+        self.setWindowTitle(t("單字本 — 螢幕查字"))
         self.resize(960, 700)
         self.setMinimumSize(560, 420)
         self.store, self.cfg = store, cfg
@@ -1000,9 +1022,9 @@ class ManagerWindow(QWidget):
         bar = QHBoxLayout()
         bar.setContentsMargins(12, 10, 12, 8)
         bar.setSpacing(8)
-        self.menu_btn = self._tool("menu", "選單：單字／文法／句子、單字測驗、匯入匯出、設定", self.toggle_drawer)
+        self.menu_btn = self._tool("menu", t("選單：單字／文法／句子、單字測驗、匯入匯出、設定"), self.toggle_drawer)
         bar.addWidget(self.menu_btn)
-        self.page_title = _label("單字測驗", "pageTitle")  # 測驗頁沒有搜尋、篩選，改顯示標題
+        self.page_title = _label(t("單字測驗"), "pageTitle")  # 測驗頁沒有搜尋、篩選，改顯示標題
         self.page_title.hide()
         bar.addWidget(self.page_title)
         self.search = QLineEdit()
@@ -1012,7 +1034,7 @@ class ManagerWindow(QWidget):
         self._search_timer = QTimer(self, singleShot=True, interval=150, timeout=self.refresh)
         self.search.textChanged.connect(lambda _: self._search_timer.start())
         bar.addWidget(self.search, 1)
-        self.filter_btn = self._tool("filter", "篩選", self.open_filter)
+        self.filter_btn = self._tool("filter", t("篩選"), self.open_filter)
         self.filter_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         bar.addWidget(self.filter_btn)
         root.addLayout(bar)
@@ -1028,7 +1050,7 @@ class ManagerWindow(QWidget):
         self.chips.setSpacing(6)
         ctx.addLayout(self.chips)
         ctx.addStretch(1)
-        ctx.addWidget(_label("排序", "sub"))
+        ctx.addWidget(_label(t("排序"), "sub"))
         self.sort = QComboBox()
         for key, text in SORTS:
             self.sort.addItem(text, key)
@@ -1098,7 +1120,7 @@ class ManagerWindow(QWidget):
         v = QVBoxLayout(host)
         v.setContentsMargins(12, 14, 12, 12)
         v.setSpacing(2)
-        v.addWidget(_label("記錄的內容", "dim"))
+        v.addWidget(_label(t("記錄的內容"), "dim"))
         self.nav = {}
         group = QButtonGroup(self)
         for key, text in VIEWS.items():
@@ -1121,8 +1143,8 @@ class ManagerWindow(QWidget):
         v.addSpacing(6)
         v.addWidget(_sep())
         v.addSpacing(6)
-        v.addWidget(_label("練習", "dim"))
-        self.quiz_btn = _button("單字測驗", "nav", lambda: self.set_view("quiz"))
+        v.addWidget(_label(t("練習"), "dim"))
+        self.quiz_btn = _button(t("單字測驗"), "nav", lambda: self.set_view("quiz"))
         self.quiz_btn.setCheckable(True)
         self.quiz_btn.setMinimumHeight(40)
         group.addButton(self.quiz_btn)
@@ -1130,22 +1152,22 @@ class ManagerWindow(QWidget):
         v.addSpacing(6)
         v.addWidget(_sep())
         v.addSpacing(6)
-        v.addWidget(_label("單字本", "dim"))
-        v.addWidget(_button("新增單字…", "nav", self.add_word))
-        v.addWidget(_button("匯入單字…", "nav", self.import_words))
-        v.addWidget(_button("匯出：單字 App 備份檔", "nav", lambda: self.export("words")))
-        v.addWidget(_button("匯出：完整備份（可匯回）", "nav", self.export_full))
-        v.addWidget(_button("匯出：句子 → 文字檔", "nav", lambda: self.export("sentences")))
-        clear = _button("清空單字本…", "nav", self.clear_words)
+        v.addWidget(_label(t("單字本"), "dim"))
+        v.addWidget(_button(t("新增單字…"), "nav", self.add_word))
+        v.addWidget(_button(t("匯入單字…"), "nav", self.import_words))
+        v.addWidget(_button(t("匯出：單字 App 備份檔"), "nav", lambda: self.export("words")))
+        v.addWidget(_button(t("匯出：完整備份（可匯回）"), "nav", self.export_full))
+        v.addWidget(_button(t("匯出：句子 → 文字檔"), "nav", lambda: self.export("sentences")))
+        clear = _button(t("清空單字本…"), "nav", self.clear_words)
         clear.setStyleSheet(f"color: {C['danger']};")
         v.addWidget(clear)
         v.addSpacing(6)
         v.addWidget(_sep())
         v.addSpacing(6)
-        v.addWidget(_button("設定", "nav", lambda: self._settings("general")))
-        v.addWidget(_button("關於與資料來源", "nav", lambda: self._settings("about")))
+        v.addWidget(_button(t("設定"), "nav", lambda: self._settings("general")))
+        v.addWidget(_button(t("關於與資料來源"), "nav", lambda: self._settings("about")))
         v.addStretch(1)
-        note = _label("字典資料：JMdict、Tomoshi、維基詞典（CC BY-SA 4.0）", "dim", wrap=True)
+        note = _label(t("字典資料：JMdict、Tomoshi、維基詞典（CC BY-SA 4.0）"), "dim", wrap=True)
         if attribution:
             note.setToolTip(attribution)
         v.addWidget(note)
@@ -1160,7 +1182,7 @@ class ManagerWindow(QWidget):
         h.setSpacing(10)
         self.toast_text = _label("", "toast")
         h.addWidget(self.toast_text)
-        self.undo_btn = _button("復原", "link", self._do_undo)
+        self.undo_btn = _button(t("復原"), "link", self._do_undo)
         h.addWidget(self.undo_btn)
         self.toast.hide()
         self._toast_timer = QTimer(self, singleShot=True, interval=4000, timeout=self.toast.hide)
@@ -1229,8 +1251,8 @@ class ManagerWindow(QWidget):
             self.quiz_page.enter()
             self.quiz_page.setFocus()
             return
-        self.search.setPlaceholderText({"words": "搜尋單字、讀音、意思、原句", "grammar": "搜尋文法、意思、例句",
-                                        "sentences": "搜尋句子、單字"}[view])
+        self.search.setPlaceholderText({"words": t("搜尋單字、讀音、意思、原句"), "grammar": t("搜尋文法、意思、例句"),
+                                        "sentences": t("搜尋句子、單字")}[view])
         self.refresh()
         self.scroll.verticalScrollBar().setValue(0)
         self.cards.verticalScrollBar().setValue(0)
@@ -1287,16 +1309,16 @@ class ManagerWindow(QWidget):
         cards = self.view != "sentences"
         if cards:
             for lv in sorted(f["levels"], key=LEVELS.index):
-                out.append((lv, lambda v=lv: f["levels"].discard(v)))
+                out.append((t(lv), lambda v=lv: f["levels"].discard(v)))
             if self.view == "words":
                 for p in sorted(f["pos"], key=POS_CATS.index):
-                    out.append((p, lambda v=p: f["pos"].discard(v)))
+                    out.append((t(p), lambda v=p: f["pos"].discard(v)))
         if f["date"] != "all":
             out.append((dict(DATE_OPTS)[f["date"]], lambda: f.__setitem__("date", "all")))
         if cards and f["status"] != "all":
             out.append((dict(STATUS_OPTS)[f["status"]], lambda: f.__setitem__("status", "all")))
         if cards and f["marked"] != "all":
-            out.append(("重點單字", lambda: f.__setitem__("marked", "all")))
+            out.append((t("重點單字"), lambda: f.__setitem__("marked", "all")))
         return out
 
     def refresh(self):
@@ -1330,7 +1352,7 @@ class ManagerWindow(QWidget):
         active = self._active()
         _clear(self.chips)
         for text, remove in active:
-            b = _button(f"{text}  ✕", "activeChip", tip=f"拿掉條件「{text}」")
+            b = _button(f"{text}  ✕", "activeChip", tip=t("拿掉條件「{text}」", text=text))
             b.clicked.connect(lambda _=False, rm=remove: (rm(), self.refresh()))
             self.chips.addWidget(b)
         n = len(active)
@@ -1339,7 +1361,8 @@ class ManagerWindow(QWidget):
         self.filter_btn.setIcon(icon("filter", C["accent"] if n else C["text"]))
         self.filter_btn.style().unpolish(self.filter_btn)
         self.filter_btn.style().polish(self.filter_btn)
-        self.count.setText(f"符合 {len(shown)} / {len(source)} 個" if (n or q) else f"{VIEWS[self.view]} {len(source)} 個")
+        self.count.setText(t("符合 {shown} / {total} 個", shown=len(shown), total=len(source)) if (n or q)
+                           else t("{view} {total} 個", view=VIEWS[self.view], total=len(source)))
 
         if self.view != "sentences" and shown:
             bar = self.cards.verticalScrollBar()
@@ -1364,11 +1387,12 @@ class ManagerWindow(QWidget):
         if not shown:
             empty = QVBoxLayout()
             empty.setContentsMargins(0, 60, 0, 0)
-            msg = _label(f"還沒有記錄的{VIEWS[self.view]}" if not source else f"沒有符合的{VIEWS[self.view]}", "sub")
+            msg = _label(t("還沒有記錄的{view}", view=VIEWS[self.view]) if not source
+                         else t("沒有符合的{view}", view=VIEWS[self.view]), "sub")
             msg.setAlignment(Qt.AlignCenter)
             empty.addWidget(msg)
             if source:
-                b = _button("清除搜尋與篩選", slot=lambda: (self.search.clear(), self.clear_filters()))
+                b = _button(t("清除搜尋與篩選"), slot=lambda: (self.search.clear(), self.clear_filters()))
                 empty.addWidget(b, 0, Qt.AlignHCenter)
             self.list.addLayout(empty)
         self.list.addStretch(1)
@@ -1455,8 +1479,9 @@ class ManagerWindow(QWidget):
     def _flag(self, rec: dict, field: str, value: bool):
         new = self._update(rec, **{field: value})
         word = new.get("word", "")
-        texts = {("marked", True): f"「{word}」設為重點單字", ("marked", False): f"「{word}」取消重點",
-                 ("learned", True): f"「{word}」標記為已學會", ("learned", False): f"「{word}」改回學習中"}
+        texts = {("marked", True): t("「{word}」設為重點單字", word=word), ("marked", False): t("「{word}」取消重點", word=word),
+                 ("learned", True): t("「{word}」標記為已學會", word=word),
+                 ("learned", False): t("「{word}」改回學習中", word=word)}
         self.show_toast(texts[field, value])
 
     def edit(self, rec: dict):
@@ -1465,7 +1490,7 @@ class ManagerWindow(QWidget):
             return
         vals = dlg.values()
         if not vals["word"]:
-            QMessageBox.warning(self, "編輯", "單字不能是空的。")
+            QMessageBox.warning(self, t("編輯"), t("單字不能是空的。"))
             return
         was_open = self.expanded == key_of(rec)
         if was_open:  # 改了單字或讀音時，存檔觸發的重新整理要認得新的鍵
@@ -1475,27 +1500,27 @@ class ManagerWindow(QWidget):
         except ValueError as e:
             if was_open:
                 self.expanded = key_of(rec)
-            QMessageBox.warning(self, "編輯", str(e))
+            QMessageBox.warning(self, t("編輯"), str(e))
             return
-        self.show_toast(f"已儲存「{new['word']}」")
+        self.show_toast(t("已儲存「{word}」", word=new["word"]))
 
     def _confirm_delete(self, what: str) -> bool:
-        box = QMessageBox(QMessageBox.Warning, "刪除", f"確定要刪除{what}嗎？\n刪除後幾秒內還可以按「復原」。",
+        box = QMessageBox(QMessageBox.Warning, t("刪除"), t("確定要刪除{what}嗎？\n刪除後幾秒內還可以按「復原」。", what=what),
                           QMessageBox.Cancel, self)
         box.setStyleSheet(QSS)
-        ok = box.addButton("刪除", QMessageBox.DestructiveRole)
+        ok = box.addButton(t("刪除"), QMessageBox.DestructiveRole)
         ok.setObjectName("danger")
         box.setDefaultButton(QMessageBox.Cancel)
         box.exec()
         return box.clickedButton() is ok
 
     def delete(self, rec: dict):
-        if not self._confirm_delete(f"「{rec.get('word', '')}」"):
+        if not self._confirm_delete(t("「{word}」", word=rec.get("word", ""))):
             return
         res = self.store.delete(key_of(rec))
         if res:
             idx, old = res
-            self.show_toast(f"已刪除「{rec.get('word', '')}」", lambda: self.store.restore(idx, old))
+            self.show_toast(t("已刪除「{word}」", word=rec.get("word", "")), lambda: self.store.restore(idx, old))
 
     def explain_sentence(self, rec: dict, again: bool = False):
         """句子頁的「講解」：已經有講解就展開／收合；沒有（或按「重新講解」）才呼叫 Gemini。"""
@@ -1525,16 +1550,16 @@ class ManagerWindow(QWidget):
                 if self.store.update_sentence(key[0], key[1], explanation=text, explain_model=model):
                     return  # 存檔會觸發重新整理
             self.refresh()
-        ai.run_async(lambda: ai.explain(key[0], model), done)
+        ai.run_async(lambda: ai.explain(key[0], model, ai.translate_lang(self.cfg)), done)
         self.refresh()
 
     def delete_sentence(self, rec: dict):
-        if not self._confirm_delete("這個句子"):
+        if not self._confirm_delete(t("這個句子")):
             return
         res =self.store.delete_sentence(rec.get("text", ""), rec.get("saved_at", ""))
         if res:
             idx, old = res
-            self.show_toast("已刪除句子", lambda: self.store.restore_sentence(idx, old))
+            self.show_toast(t("已刪除句子"), lambda: self.store.restore_sentence(idx, old))
 
     def speak(self, text: str):
         """朗讀（展開卡片上的喇叭）；沒有日文語音時提示怎麼裝。"""
@@ -1543,21 +1568,22 @@ class ManagerWindow(QWidget):
     def copy_word(self, rec: dict):
         rd = rec.get("reading", "")
         text = rec.get("word", "") + (f"【{self.store.reading_with_also(rec)}】" if rd and rd != rec.get("word") else "")
-        zh = (rec.get("meaning_zh") or rec.get("meaning_en") or []) + self.store.also_meanings(rec)
+        zh = lang.rec_meanings(rec)[0] + self.store.also_display(rec)
         QGuiApplication.clipboard().setText(text + ("　" + "；".join(zh) if zh else ""))
-        self.show_toast(f"已複製「{rec.get('word', '')}」")
+        self.show_toast(t("已複製「{word}」", word=rec.get("word", "")))
 
     def copy_sentence(self, rec: dict):
         QGuiApplication.clipboard().setText(one_line(rec.get("text", "")))
-        self.show_toast("已複製句子")
+        self.show_toast(t("已複製句子"))
 
     def export(self, kind: str):
         self.toggle_drawer(False)
         same = (kind == "sentences") == (self.view == "sentences")
         dlg = ExportDialog(self, kind, self.store, self.cfg, list(self.shown) if same else None)
         if dlg.exec() == QDialog.Accepted:
-            extra = f"（重點單字 {dlg.marked} 個）" if kind == "words" else ""
-            self.show_toast(f"已匯出 {dlg.count}{dlg.unit}{extra}到 {dlg.out.name}")
+            extra = t("（重點單字 {n} 個）", n=dlg.marked) if kind == "words" else ""
+            self.show_toast(t("已匯出 {count}{unit}{extra}到 {name}", count=dlg.count, unit=dlg.unit, extra=extra,
+                              name=dlg.out.name))
 
     # ---------------------------------------------------------------- 單字本管理
     def add_word(self):
@@ -1566,57 +1592,60 @@ class ManagerWindow(QWidget):
         while dlg.exec() == QDialog.Accepted:
             rec = dlg.record()
             if not rec["word"] or not (rec["meaning_zh"] or rec["meaning_en"]):
-                QMessageBox.warning(self, "新增單字", "要有單字和至少一個意思。")
+                QMessageBox.warning(self, t("新增單字"), t("要有單字和至少一個意思。"))
                 continue
             if not self.store.add_record(rec):
-                QMessageBox.warning(self, "新增單字", f"單字本裡已經有「{rec['word']}【{rec['reading']}】」。")
+                QMessageBox.warning(self, t("新增單字"),
+                                    t("單字本裡已經有「{word}【{reading}】」。", word=rec["word"], reading=rec["reading"]))
                 continue
-            self.show_toast(f"已新增「{rec['word']}」")
+            self.show_toast(t("已新增「{word}」", word=rec["word"]))
             return
 
     def import_words(self):
         self.toggle_drawer(False)
-        path, _ = QFileDialog.getOpenFileName(self, "匯入單字", str(self.store.path.parent),
-                                              "單字 App 備份檔、完整備份 (*.txt *.json *.jsonl);;所有檔案 (*)")
+        path, _ = QFileDialog.getOpenFileName(self, t("匯入單字"), str(self.store.path.parent),
+                                              t("單字 App 備份檔、完整備份 (*.txt *.json *.jsonl);;所有檔案 (*)"))
         if not path:
             return
         try:
             n = self.store.import_file(Path(path))
         except (OSError, ValueError, UnicodeDecodeError) as e:
-            QMessageBox.warning(self, "匯入單字", f"沒辦法匯入：{e}")
+            QMessageBox.warning(self, t("匯入單字"), t("沒辦法匯入：{err}", err=e))
             return
-        QMessageBox.information(self, "匯入單字", f"新增 {n['added']} 個、補上資料 {n['updated']} 個、"
-                                                f"略過 {n['skipped']} 個（單字本裡已經有了，或檔案裡重複）。")
+        QMessageBox.information(self, t("匯入單字"),
+                                t("新增 {added} 個、補上資料 {updated} 個、略過 {skipped} 個（單字本裡已經有了，或檔案裡重複）。",
+                                  added=n["added"], updated=n["updated"], skipped=n["skipped"]))
 
     def export_full(self):
         self.toggle_drawer(False)
-        name = f"單字本備份_{datetime.now():%Y%m%d}.jsonl"
-        path, _ = QFileDialog.getSaveFileName(self, "完整備份", str(self.store.path.parent / name), "單字本備份 (*.jsonl)")
+        name = t("單字本備份_{stamp}.jsonl", stamp=datetime.now().strftime("%Y%m%d"))
+        path, _ = QFileDialog.getSaveFileName(self, t("完整備份"), str(self.store.path.parent / name),
+                                            t("單字本備份 (*.jsonl)"))
         if not path:
             return
         try:
             n = self.store.export_jsonl(Path(path))
         except OSError as e:
-            QMessageBox.warning(self, "完整備份", f"存檔失敗：{e}")
+            QMessageBox.warning(self, t("完整備份"), t("存檔失敗：{err}", err=e))
             return
-        self.show_toast(f"已備份 {n} 個（含文法）到 {Path(path).name}，可以用「匯入單字」匯回來")
+        self.show_toast(t("已備份 {n} 個（含文法）到 {name}，可以用「匯入單字」匯回來", n=n, name=Path(path).name))
 
     def clear_words(self):
         self.toggle_drawer(False)
         n = len(self.store.records())
         if not n:
-            self.show_toast("單字本已經是空的")
+            self.show_toast(t("單字本已經是空的"))
             return
-        box = QMessageBox(QMessageBox.Warning, "清空單字本",
-                          f"確定要清空單字本嗎？會刪掉 {n} 個單字和文法（記錄的句子不受影響）。\n"
-                          "清空前會自動另存一份備份在單字本資料夾，幾秒內也可以按「復原」。",
+        box = QMessageBox(QMessageBox.Warning, t("清空單字本"),
+                          t("確定要清空單字本嗎？會刪掉 {n} 個單字和文法（記錄的句子不受影響）。\n"
+                            "清空前會自動另存一份備份在單字本資料夾，幾秒內也可以按「復原」。", n=n),
                           QMessageBox.Cancel, self)
         box.setStyleSheet(QSS)
-        ok = box.addButton("清空", QMessageBox.DestructiveRole)
+        ok = box.addButton(t("清空"), QMessageBox.DestructiveRole)
         ok.setObjectName("danger")
         box.setDefaultButton(QMessageBox.Cancel)
         box.exec()
         if box.clickedButton() is not ok:
             return
         old, backup = self.store.clear()
-        self.show_toast(f"已清空（備份：{backup.name}）", lambda: self.store.restore_all(old))
+        self.show_toast(t("已清空（備份：{name}）", name=backup.name), lambda: self.store.restore_all(old))

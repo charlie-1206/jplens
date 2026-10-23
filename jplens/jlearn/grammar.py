@@ -216,6 +216,15 @@ def rule_compound_head(rule: Rule, t: Token) -> str | None:
     return None
 
 
+def rule_form_only(rule: Rule, t: Token) -> bool:
+    """規則只靠詞性、活用形比對到 t（命令形「:動詞;命令形」、意向形）：t 本身不是句型的一部分（突っ走れ 的 突っ走る）。"""
+    for seq in rule.seqs:
+        els = compile_seq(seq)
+        if all(not a.has_text for el in els for a in el.alts) and any(el.match(t) for el in els):
+            return True
+    return False
+
+
 def match_line(tokens: list[Token], rules=None) -> list[Rule]:
     """回傳這一句比對到的規則（已移除被更完整句型包住的比對），依出現位置排序。"""
     out = []

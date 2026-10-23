@@ -9,6 +9,8 @@
   ② 的門檻（10-21 在使用者 303 個字上看過分數帶）：兩個字的短說法同義時分數不高（即刻／即時 0.74、開端／開頭 0.73、
   起點／起端 0.73），相關但不同義的是 0.71（桌子／椅子）、無關的約 0.5。目的是答案唯一、多排除沒關係，取 0.72：
   每個字平均排除 5.6 個（最多 27 個，300 個字裡還剩 275 個可以挑）。
+  解釋的語言是 English 時（10-23）：① 的英文以詞為單位、詞尾變化算同一個（faint／faintly）；② 改比這個字的中文意思
+  （zh_meanings：紀錄或字典的中文；bge-small-zh 比英文分不出同義），① 也加比中文意思。
 - 些微混淆（加分，不是硬規則）：選意思時，選項的中文裡有答案的漢字（毛布 → 有「毛」的意思），
   才不會一看漢字就知道；選單字時，選項的漢字出現在題目的中文裡、和答案共用漢字、讀音相近。
 - 單字本太少（湊不滿 3 個）：從日檢單字表補，同樣檢查①②。
@@ -26,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import lang
 from .config import APP_DIR, ROOT
 from .kanji_variants import TO_TW
 
@@ -39,15 +42,15 @@ N_OPTIONS = 4
 _PAREN = re.compile(r"[（(][^）)]*[）)]")
 _SPLIT = re.compile(r"[、，,；;/／]")
 _SPLIT_CJK = re.compile(r"[、，,；;/／\s]+")
-_CJK = re.compile(r"[㐀-鿿]")
-_KANA = re.compile(r"^[぀-ヿー・]+$")
+_CJK = re.compile(r"[㐀-鿿]")  # i18n: 不翻
+_KANA = re.compile(r"^[぀-ヿー・]+$")  # i18n: 不翻
 _STRIP = " 　…。．."
-_SUFFIX = ("的", "地")  # 迷人的、唐突地 → 迷人、唐突；只去掉結尾一個，而且至少留兩個字（目的、墓地、道地 不動）
+_SUFFIX = ("的", "地")  # 迷人的、唐突地 → 迷人、唐突；只去掉結尾一個，而且至少留兩個字（目的、墓地、道地 不動）  # i18n: 不翻
 
 
 def meanings(rec: dict) -> list[str]:
-    """這個字的意思（中文優先，沒有中文用英文）。"""
-    return list(rec.get("meaning_zh") or []) or list(rec.get("meaning_en") or [])
+    """這個字的意思（解釋的語言優先，lang.rec_meanings）。"""
+    return lang.rec_meanings(rec)[0]
 
 
 def shown(rec: dict) -> str:
@@ -57,8 +60,12 @@ def shown(rec: dict) -> str:
 
 def glosses(rec: dict) -> list[str]:
     """意思切成一個個說法（去掉括號裡的補充）：「戳、刺；撞（球）」→ [戳, 刺, 撞]。也讀的意思也算。"""
+    return split_glosses(meanings(rec) + [mean for _, mean in rec.get("also") or []]) or \
+        ["".join(meanings(rec)) or rec.get("word", "")]
+
+
+def split_glosses(texts: list[str]) -> list[str]:
     out = []
-    texts = meanings(rec) + [mean for _, mean in rec.get("also") or []]
     for sense in texts:
         sense = _PAREN.sub("", sense)
         # 單字 App 自己輸入的解釋常用空白隔開（頻繁地 經常地）；英文不能照空白切
@@ -68,7 +75,7 @@ def glosses(rec: dict) -> list[str]:
                 g = g[:-1]
             if g:
                 out.append(g)
-    return list(dict.fromkeys(out)) or ["".join(meanings(rec)) or rec.get("word", "")]
+    return list(dict.fromkeys(out))
 
 
 def kanji(s: str) -> set[str]:
@@ -81,8 +88,55 @@ def pair_key(a: str, b: str) -> tuple[str, str]:
 
 
 def _strings_overlap(ga: list[str], gb: list[str]) -> bool:
-    """單字 App 原本的規則：說法相同，或 2 個字以上互相包含。"""
-    return any(x == y or (len(x) >= 2 and len(y) >= 2 and (x in y or y in x)) for x in ga for y in gb)
+    """單字 App 原本的規則：說法相同，或 2 個字以上互相包含。英文以詞為單位比（_en_overlap）。"""
+    for x in ga:
+        for y in gb:
+            if x == y:
+                return True
+            if _CJK.search(x) or _CJK.search(y) or _KANA_ANY.search(x) or _KANA_ANY.search(y):
+                if len(x) >= 2 and len(y) >= 2 and (x in y or y in x):
+                    return True
+            elif _en_overlap(_en_words(x), _en_words(y)):
+                return True
+    return False
+
+
+_EN_WORD = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+_KANA_ANY = re.compile(r"[぀-ヿ]")  # i18n: 不翻
+# 只有這些詞的說法（to do、to be、one's）太空泛：只算完全相同，不算「包含」
+_EN_STOP = {"to", "a", "an", "the", "be", "do", "get", "have", "make", "one", "one's", "oneself", "someone", "something",
+            "of", "in", "on", "at", "with", "for", "from", "by", "as", "up", "out", "and", "or", "not", "e", "g", "etc"}
+
+
+def _stem(w: str) -> str:
+    """粗略的詞幹：faintly／faint、ignoring／ignore、slowly／slow 比得起來（只用來判斷同義，不顯示）。"""
+    for suf in ("ly", "ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3 and not (suf == "s" and w.endswith("ss")):
+            w = w[:-len(suf)]
+            break
+    return w[:-1] if w.endswith("e") and len(w) > 3 else w
+
+
+def _en_words(g: str) -> tuple[str, ...]:
+    ws = _EN_WORD.findall(g.lower())
+    while ws and ws[0] in ("to", "a", "an", "the"):  # to eat／eat、a look／look
+        ws = ws[1:]
+    return tuple(_stem(w) for w in ws)
+
+
+_EN_STOP_STEMS = {_stem(w) for w in _EN_STOP}
+
+
+def _en_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
+    """英文說法：詞幹相同，或短的整段出現在長的裡面（burst／burst open；pop 不算在 population 裡）。"""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    s, lg = (a, b) if len(a) <= len(b) else (b, a)
+    if all(w in _EN_STOP_STEMS for w in s):
+        return False
+    return any(lg[i:i + len(s)] == s for i in range(len(lg) - len(s) + 1))
 
 
 def _reading_close(a: str, b: str) -> bool:
@@ -207,24 +261,26 @@ class QuizMaker:
     """pool：可以拿來當混淆選項的單字（整本單字本）；key：紀錄 → 唯一的鍵（vocab.key_of）。"""
 
     def __init__(self, pool: list[dict], key, semantic: Semantic | None = None, same: SamePairs | None = None,
-                 extra=None, rand: random.Random | None = None):
+                 extra=None, rand: random.Random | None = None, zh_of=None):
         self.key, self.sem, self.same = key, semantic, same
         self.extra = extra  # 單字本不夠時補選項：extra(target, n) → 紀錄列表（日檢單字表）
         self.rand = rand or random.Random()
+        # 解釋的語言是 English 時，語意模型改比中文意思（zh_meanings）；中文模式就是顯示的意思
+        self.zh_of = zh_of if lang.english() else None
         self.pool = [r for r in pool if meanings(r) and r.get("word")]
-        self._g = {id(r): glosses(r) for r in self.pool}
+        self._g, self._z, self._v = {}, {}, {}  # 顯示語言的說法、給語意模型比的說法、說法的向量
         self._prepare(self.pool)
 
     def _prepare(self, recs):
+        """算紀錄的說法與向量（補進來的紀錄是新物件，id 可能和已回收的重複，所以一律重算）。"""
+        for r in recs:
+            self._g[id(r)] = glosses(r)
+            self._z[id(r)] = split_glosses(self.zh_of(r)) if self.zh_of else self._g[id(r)]
         if self.sem is not None and self.sem.ok:
-            texts = [g for r in recs for g in self._g.setdefault(id(r), glosses(r))]
-            self._v = getattr(self, "_v", {})
-            self._v.update(self.sem.vectors(texts))
-        else:
-            self._v = getattr(self, "_v", {})
+            self._v.update(self.sem.vectors([g for r in recs for g in self._z[id(r)]]))
 
     def _mat(self, rec) -> np.ndarray | None:
-        vs = [self._v[g] for g in self._g[id(rec)] if g in self._v]
+        vs = [self._v[g] for g in self._z[id(rec)] if g in self._v]
         return np.stack(vs) if vs else None
 
     def same_meaning(self, a: dict, b: dict) -> bool:
@@ -233,8 +289,9 @@ class QuizMaker:
             return True
         if self.same is not None and self.same.has(self.key(a), self.key(b)):
             return True
-        ga, gb = self._g[id(a)], self._g[id(b)]
-        if _strings_overlap(ga, gb):
+        if _strings_overlap(self._g[id(a)], self._g[id(b)]):
+            return True
+        if self.zh_of is not None and _strings_overlap(self._z[id(a)], self._z[id(b)]):
             return True
         ma, mb = self._mat(a), self._mat(b)
         return ma is not None and mb is not None and float((ma @ mb.T).max()) >= SAME_SIM
@@ -263,13 +320,10 @@ class QuizMaker:
 
     def distractors(self, target: dict, mode: str, k: int = N_OPTIONS - 1) -> list[dict]:
         if id(target) not in self._g:
-            self._g[id(target)] = glosses(target)
             self._prepare([target])
         ok = [c for c in self.pool if c is not target and not self.same_meaning(target, c)]
         if len(ok) < k and self.extra is not None:
             more = [r for r in self.extra(target, 40) if r.get("word") and meanings(r)]
-            for r in more:
-                self._g[id(r)] = glosses(r)
             self._prepare(more)
             for r in more:  # 一個一個加，補進來的之間也要比（同寫法的兩個會在下面被去掉，湊不滿 k 個整題就沒了）
                 if len(ok) >= k:
@@ -313,6 +367,25 @@ class QuizMaker:
         return out
 
 
+def zh_meanings(dictionary):
+    """解釋的語言是 English 時，給語意模型比的中文意思：紀錄裡有就用（中文模式時記的字），沒有就查字典。回傳 zh_of(rec)。
+    bge-small-zh 比英文說法分不出同義（10-23 在使用者 327 個字上：中文判斷同義的配對分數中位數 0.70、其他 0.62），
+    英文模型要另外下載，所以借用字典的中文意思；英文說法本身另外用 _strings_overlap 比。"""
+    cache = {}
+
+    def zh_of(rec: dict) -> list[str]:
+        if rec.get("meaning_zh"):
+            return list(rec["meaning_zh"])
+        k = (rec.get("word", ""), rec.get("reading", ""))
+        if k not in cache:
+            try:
+                cache[k] = dictionary.lookup([k[0]], k[1], zh=True).zh if dictionary is not None else []
+            except Exception:
+                cache[k] = []
+        return cache[k]
+    return zh_of
+
+
 def jlpt_fill(dictionary):
     """單字本不夠時，從日檢單字表補混淆選項（和答案同級或相鄰級）：回傳 extra(target, n)。"""
     from .words import _jlpt_lists
@@ -327,11 +400,13 @@ def jlpt_fill(dictionary):
             zh = []
             if dictionary is not None:
                 try:
-                    zh = dictionary.lookup([e.word], e.reading, None).zh[:3]
+                    m = dictionary.lookup([e.word], e.reading, None)
+                    zh = (m.en if lang.english() else m.zh)[:3]
                 except Exception:
                     zh = []
             if zh:
-                out.append({"word": e.word, "reading": e.reading, "pos": "", "jlpt": f"N{e.level}", "meaning_zh": zh})
+                out.append({"word": e.word, "reading": e.reading, "pos": "", "jlpt": f"N{e.level}",
+                            "meaning_en" if lang.english() else "meaning_zh": zh})
             if len(out) >= n:
                 break
         return out

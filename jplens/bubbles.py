@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 
 from .config import APP_DIR
+from .i18n import t
 
 MODEL_DIR = APP_DIR / "data" / "models" / "ogkalu"
 MODEL_GPU, MODEL_CPU = MODEL_DIR / "detector.onnx", MODEL_DIR / "detector_int8.onnx"
@@ -69,7 +70,7 @@ class BubbleDetector:
             prefer = [MODEL_GPU, MODEL_CPU] if gpu else [MODEL_CPU, MODEL_GPU]
             path = next((p for p in prefer if p.exists()), prefer[0])
         if not path.exists():
-            raise FileNotFoundError(f"找不到漫畫文字偵測模型 {path.name}，請從 {MODEL_URL} 下載到 {MODEL_DIR}")
+            raise FileNotFoundError(t("找不到漫畫文字偵測模型 {name}，請從 {url} 下載到 {dir}", name=path.name, url=MODEL_URL, dir=MODEL_DIR))
         so = ort.SessionOptions()
         so.log_severity_level = 3
         so.add_session_config_entry("session.intra_op.allow_spinning", "0")  # 不和其他 session 搶 CPU（見 ocr._make_rapidocr）

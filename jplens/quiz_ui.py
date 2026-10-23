@@ -13,14 +13,15 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QProgr
                                QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import quiz
+from .i18n import t
 from .vocab import key_of
 
-MODES = [("meaning", "看單字選意思"), ("word", "看意思選單字"), ("mixed", "混合")]
-COUNTS = [(10, "10 題"), (20, "20 題"), (30, "30 題")]
-SCOPES = [("all", "全部"), ("marked", "重點單字"), ("recent", "最近記錄的")]
-LEVELS = ["N5", "N4", "N3", "N2", "N1", "級外"]
-LEARNED = [(False, "不出"), (True, "也出")]
-TIMES = [(5, "5 秒"), (10, "10 秒"), (15, "15 秒"), (0, "不限")]
+MODES = [("meaning", t("看單字選意思")), ("word", t("看意思選單字")), ("mixed", t("混合"))]
+COUNTS = [(10, t("10 題")), (20, t("20 題")), (30, t("30 題"))]
+SCOPES = [("all", t("全部")), ("marked", t("重點單字")), ("recent", t("最近記錄的"))]
+LEVELS = ["N5", "N4", "N3", "N2", "N1", "級外"]  # i18n: 不翻
+LEARNED = [(False, t("不出")), (True, t("也出"))]
+TIMES = [(5, t("5 秒")), (10, t("10 秒")), (15, t("15 秒")), (0, t("不限"))]
 AUTO_NEXT_MS = 900  # 答對後自動下一題
 # 這次執行期間記住設定（關掉單字本視窗再打開還在）
 SETTINGS = {"mode": "meaning", "count": 10, "scope": "all", "recent": 50, "levels": set(), "learned": False, "time": 10}
@@ -46,7 +47,7 @@ def _button(text, name=None, slot=None):
 
 def level_of(rec: dict) -> str:
     lv = rec.get("jlpt", "")
-    return lv if lv in LEVELS[:5] else "級外"
+    return lv if lv in LEVELS[:5] else "級外"  # i18n: 不翻
 
 
 class _Relay(QObject):
@@ -141,26 +142,26 @@ class QuizPage(QWidget):
         v = QVBoxLayout(host)
         v.setContentsMargins(24, 12, 24, 20)
         v.setSpacing(10)
-        v.addWidget(_label("從單字本出題。選項裡不會有意思一樣的字（答錯時如果你覺得也對，可以按「這個也對」）。", "sub", wrap=True))
+        v.addWidget(_label(t("從單字本出題。選項裡不會有意思一樣的字（答錯時如果你覺得也對，可以按「這個也對」）。"), "sub", wrap=True))
         v.addSpacing(4)
-        for title, opts, key in (("題型", MODES, "mode"), ("題數", COUNTS, "count")):
+        for title, opts, key in ((t("題型"), MODES, "mode"), (t("題數"), COUNTS, "count")):
             row = self._section(v, title, opts, key)
             row.addStretch(1)
             v.addLayout(row)
-        row = self._section(v, "範圍", SCOPES, "scope")
+        row = self._section(v, t("範圍"), SCOPES, "scope")
         self.recent = QSpinBox()
         self.recent.setRange(5, 10000)
         self.recent.setSingleStep(10)
         self.recent.setValue(SETTINGS["recent"])
-        self.recent.setSuffix(" 個")
+        self.recent.setSuffix(t(" 個"))
         self.recent.valueChanged.connect(lambda n: (SETTINGS.__setitem__("recent", n), self.update_count()))
         row.addWidget(self.recent)
         row.addStretch(1)
         v.addLayout(row)
-        row = self._section(v, "級數（可複選，不選＝全部）", [(lv, lv) for lv in LEVELS], "levels", multi=True)
+        row = self._section(v, t("級數（可複選，不選＝全部）"), [(lv, t(lv)) for lv in LEVELS], "levels", multi=True)
         row.addStretch(1)
         v.addLayout(row)
-        for title, opts, key in (("已學會的單字", LEARNED, "learned"), ("每題時間", TIMES, "time")):
+        for title, opts, key in ((t("已學會的單字"), LEARNED, "learned"), (t("每題時間"), TIMES, "time")):
             row = self._section(v, title, opts, key)
             row.addStretch(1)
             v.addLayout(row)
@@ -169,7 +170,7 @@ class QuizPage(QWidget):
         self.count_label = _label("", "sub")
         foot.addWidget(self.count_label)
         foot.addStretch(1)
-        self.start_btn = _button("開始測驗", "primary", self.start)
+        self.start_btn = _button(t("開始測驗"), "primary", self.start)
         self.start_btn.setMinimumWidth(140)
         foot.addWidget(self.start_btn)
         v.addLayout(foot)
@@ -180,7 +181,7 @@ class QuizPage(QWidget):
 
     def candidates(self) -> list[dict]:
         """符合設定、可以出題的單字（有意思、不是文法）。"""
-        recs = [r for r in self.win.store.records() if r.get("pos") != "文法" and quiz.meanings(r) and r.get("word")]
+        recs = [r for r in self.win.store.records() if r.get("pos") != "文法" and quiz.meanings(r) and r.get("word")]  # i18n: 不翻
         if SETTINGS["scope"] == "marked":
             recs = [r for r in recs if r.get("marked")]
         elif SETTINGS["scope"] == "recent":
@@ -194,8 +195,8 @@ class QuizPage(QWidget):
     def update_count(self):
         n = len(self.candidates())
         self.recent.setEnabled(SETTINGS["scope"] == "recent")
-        self.count_label.setText(f"符合條件的單字 {n} 個" + ("" if n >= SETTINGS["count"] or not n
-                                                       else f"（不到 {SETTINGS['count']} 題，就出 {n} 題）"))
+        self.count_label.setText(t("符合條件的單字 {n} 個", n=n) + (
+            "" if n >= SETTINGS["count"] or not n else t("（不到 {count} 題，就出 {n} 題）", count=SETTINGS["count"], n=n)))
         self.start_btn.setEnabled(n > 0)
 
     def enter(self):
@@ -213,7 +214,7 @@ class QuizPage(QWidget):
         page = QWidget()
         v = QVBoxLayout(page)
         v.addStretch(1)
-        self.loading = _label("準備題目中…", "sub")
+        self.loading = _label(t("準備題目中…"), "sub")
         self.loading.setAlignment(Qt.AlignCenter)
         v.addWidget(self.loading)
         v.addStretch(2)
@@ -226,9 +227,9 @@ class QuizPage(QWidget):
             return
         n, mode = min(SETTINGS["count"], len(targets)), SETTINGS["mode"]
         first = self.sem is None or not self.sem._vec
-        self.loading.setText("準備題目中…" + ("（第一次要分析每個意思，單字多的話要幾秒）" if first else ""))
+        self.loading.setText(t("準備題目中…") + (t("（第一次要分析每個意思，單字多的話要幾秒）") if first else ""))
         self.pages.setCurrentWidget(self.loading_page)
-        pool = [r for r in self.win.store.records() if r.get("pos") != "文法" and quiz.meanings(r)]
+        pool = [r for r in self.win.store.records() if r.get("pos") != "文法" and quiz.meanings(r)]  # i18n: 不翻
         store = self.win.store
         self._job += 1
         job = self._job
@@ -238,13 +239,14 @@ class QuizPage(QWidget):
                 if self.sem is None:
                     self.sem = quiz.Semantic(cache=quiz.VEC_CACHE)
                 same = quiz.SamePairs(store.path.parent / quiz.SAME_NAME)
-                maker = quiz.QuizMaker(pool, key_of, self.sem, same, quiz.jlpt_fill(store.dictionary))
+                maker = quiz.QuizMaker(pool, key_of, self.sem, same, quiz.jlpt_fill(store.dictionary),
+                                       zh_of=quiz.zh_meanings(store.dictionary))
                 by_key = {key_of(r): r for r in maker.pool}
                 ts = [by_key.get(key_of(t), t) for t in targets]  # 用 pool 裡同一個物件（選項比對靠 is）
                 res = (maker, maker.make(ts, mode, n), "")
             except Exception as e:  # noqa: BLE001
                 import logging
-                logging.getLogger(__name__).exception("出題失敗")
+                logging.getLogger(__name__).exception("出題失敗")  # i18n: 不翻
                 res = (None, [], str(e))
             self._relay.done.emit(lambda r: self._ready(r, job), res)
 
@@ -257,7 +259,7 @@ class QuizPage(QWidget):
         if err or not questions:
             self.pages.setCurrentWidget(self.setup_page)
             self.update_count()
-            self.win.show_toast("出題失敗：" + err if err else "湊不出選項（單字太少），請先記錄更多單字")
+            self.win.show_toast(t("出題失敗：{err}", err=err) if err else t("湊不出選項（單字太少），請先記錄更多單字"))
             return
         self.maker, self.questions, self.results, self.i = maker, questions, [], 0
         self.pages.setCurrentWidget(self.question_page)
@@ -275,7 +277,7 @@ class QuizPage(QWidget):
         top.addStretch(1)
         self.score = _label("", "sub")
         top.addWidget(self.score)
-        top.addWidget(_button("結束", None, self.finish))
+        top.addWidget(_button(t("結束"), None, self.finish))
         v.addLayout(top)
         self.timebar = QProgressBar()
         self.timebar.setObjectName("quizTime")
@@ -301,10 +303,10 @@ class QuizPage(QWidget):
         feed = QHBoxLayout()
         self.feedback = _label("", "quizFeedback", wrap=True)
         feed.addWidget(self.feedback, 1)
-        self.same_btn = _button("這個也對", None, self.mark_same)
-        self.same_btn.setToolTip("你選的也是正確的意思：這題算答對，以後這兩個字不會出現在同一題")
+        self.same_btn = _button(t("這個也對"), None, self.mark_same)
+        self.same_btn.setToolTip(t("你選的也是正確的意思：這題算答對，以後這兩個字不會出現在同一題"))
         feed.addWidget(self.same_btn)
-        self.next_btn = _button("下一題", "primary", self.next_question)
+        self.next_btn = _button(t("下一題"), "primary", self.next_question)
         self.next_btn.setMinimumWidth(110)
         feed.addWidget(self.next_btn)
         v.addLayout(feed)
@@ -320,13 +322,13 @@ class QuizPage(QWidget):
         q = self.q
         self.answered = False
         self._next_timer.stop()
-        self.progress.setText(f"第 {self.i + 1} / {len(self.questions)} 題")
-        self.score.setText(f"答對 {sum(r['ok'] for r in self.results)}")
+        self.progress.setText(t("第 {i} / {n} 題", i=self.i + 1, n=len(self.questions)))
+        self.score.setText(t("答對 {n}", n=sum(r["ok"] for r in self.results)))
         self.prompt.setProperty("kind", q.mode)
         self.prompt.style().unpolish(self.prompt)
         self.prompt.style().polish(self.prompt)
         self.prompt.setText(q.prompt)
-        self.prompt_sub.setText("選出意思" if q.mode == "meaning" else "選出單字")
+        self.prompt_sub.setText(t("選出意思") if q.mode == "meaning" else t("選出單字"))
         for k, o in enumerate(self.opts):
             o.text.setText(q.label(k))
             o.text.setProperty("kind", q.mode)
@@ -367,18 +369,18 @@ class QuizPage(QWidget):
             o.sub.setText(word if q.mode == "meaning" else (f"【{rd}】　" if rd and rd != rec.get("word") else "")
                           + quiz.shown(rec))
             o.sub.show()
-        t = q.target
-        rd = t.get("reading", "")
-        self.prompt_sub.setText((f"【{rd}】" if rd and rd != t.get("word") else "") if q.mode == "meaning"
-                                else t.get("word", "") + (f"【{rd}】" if rd and rd != t.get("word") else ""))
-        self.score.setText(f"答對 {sum(r['ok'] for r in self.results)}")
+        tg = q.target
+        rd = tg.get("reading", "")
+        self.prompt_sub.setText((f"【{rd}】" if rd and rd != tg.get("word") else "") if q.mode == "meaning"
+                                else tg.get("word", "") + (f"【{rd}】" if rd and rd != tg.get("word") else ""))
+        self.score.setText(t("答對 {n}", n=sum(r["ok"] for r in self.results)))
         if ok:
-            self.feedback.setText("✓ 答對了")
+            self.feedback.setText(t("✓ 答對了"))
             self._next_timer.start()
         else:
-            self.feedback.setText("✗ 時間到" if k is None else "✗ 答錯了")
+            self.feedback.setText(t("✗ 時間到") if k is None else t("✗ 答錯了"))
             self.same_btn.setVisible(k is not None)
-        self.next_btn.setText("看結果" if self.i == len(self.questions) - 1 else "下一題")
+        self.next_btn.setText(t("看結果") if self.i == len(self.questions) - 1 else t("下一題"))
         self.next_btn.show()
         self.next_btn.setFocus()
 
@@ -390,8 +392,8 @@ class QuizPage(QWidget):
             self.maker.same.add(key_of(self.q.target), key_of(chosen))
         r["ok"] = r["same"] = True
         self.same_btn.hide()
-        self.feedback.setText(f"✓ 算答對：以後「{self.q.target.get('word')}」和「{chosen.get('word')}」不會出現在同一題")
-        self.score.setText(f"答對 {sum(x['ok'] for x in self.results)}")
+        self.feedback.setText(t("✓ 算答對：以後「{a}」和「{b}」不會出現在同一題", a=self.q.target.get("word"), b=chosen.get("word")))
+        self.score.setText(t("答對 {n}", n=sum(x["ok"] for x in self.results)))
         self.next_btn.setFocus()
 
     def next_question(self):
@@ -427,8 +429,8 @@ class QuizPage(QWidget):
         btns.addStretch(1)
         self.retry_btn = _button("", "primary", self.retry_wrong)
         btns.addWidget(self.retry_btn)
-        btns.addWidget(_button("再來一次", None, lambda: self.start()))
-        btns.addWidget(_button("回到設定", None, self.back_to_setup))
+        btns.addWidget(_button(t("再來一次"), None, lambda: self.start()))
+        btns.addWidget(_button(t("回到設定"), None, self.back_to_setup))
         btns.addStretch(1)
         v.addLayout(btns)
         scroll = QScrollArea()
@@ -448,7 +450,7 @@ class QuizPage(QWidget):
         n, ok = len(self.results), sum(r["ok"] for r in self.results)  # 中途按「結束」：還沒作答的題目不算
         self.result_title.setText(f"{ok} / {n}" + (f"　{round(ok * 100 / n)}%" if n else ""))
         wrong = [r for r in self.results if not r["ok"]]
-        self.retry_btn.setText(f"重測答錯的 {len(wrong)} 題")
+        self.retry_btn.setText(t("重測答錯的 {n} 題", n=len(wrong)))
         self.retry_btn.setVisible(bool(wrong))
         while self.result_list.count():
             item = self.result_list.takeAt(0)
@@ -462,7 +464,7 @@ class QuizPage(QWidget):
             self.sem.save()
 
     def _result_row(self, r) -> QFrame:
-        q, t = r["q"], r["q"].target
+        q, tg = r["q"], r["q"].target
         row = QFrame()
         row.setObjectName("card")
         h = QHBoxLayout(row)
@@ -472,15 +474,15 @@ class QuizPage(QWidget):
         h.addWidget(mark, 0, Qt.AlignTop)
         v = QVBoxLayout()
         v.setSpacing(2)
-        rd = t.get("reading", "")
-        v.addWidget(_label(t.get("word", "") + (f"【{rd}】" if rd and rd != t.get("word") else ""), "quizResWord"))
-        v.addWidget(_label("；".join(quiz.meanings(t)), "summary", wrap=True))
+        rd = tg.get("reading", "")
+        v.addWidget(_label(tg.get("word", "") + (f"【{rd}】" if rd and rd != tg.get("word") else ""), "quizResWord"))
+        v.addWidget(_label("；".join(quiz.meanings(tg)), "summary", wrap=True))
         if not r["ok"]:
-            your = "時間到，沒有作答" if r["chosen"] is None else "你選：" + q.label(r["chosen"]) + (
-                f"（{q.options[r['chosen']].get('word', '')}）" if q.mode == "meaning" else "")
+            your = t("時間到，沒有作答") if r["chosen"] is None else t("你選：{label}", label=q.label(r["chosen"]) + (
+                f"（{q.options[r['chosen']].get('word', '')}）" if q.mode == "meaning" else ""))
             v.addWidget(_label(your, "dim", wrap=True))
         elif r["same"]:
-            v.addWidget(_label("你按了「這個也對」", "dim"))
+            v.addWidget(_label(t("你按了「這個也對」"), "dim"))
         h.addLayout(v, 1)
         return row
 

@@ -27,7 +27,9 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCursor
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from .config import FROZEN, ROOT, Config
+from . import lang
+from .config import CONFIG_PATH, FROZEN, ROOT, Config
+from .i18n import t
 from .ui import BusySpinner, HighlightOverlay, ResultPopup, SelectionFrame, make_icon, native_rect
 
 LOG_DIR = ROOT / "logs"
@@ -43,10 +45,10 @@ def _ask_truth(default: str) -> str | None:
     from PySide6.QtGui import QTextOption
     from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout
     dlg = QDialog()
-    dlg.setWindowTitle("螢幕查字：保存畫面")
+    dlg.setWindowTitle(t("螢幕查字：保存畫面"))
     dlg.setWindowFlag(Qt.WindowStaysOnTopHint)
     lay = QVBoxLayout(dlg)
-    hint = QLabel("正確答案（照畫面上選到的範圍，改成正確的文字；不確定就清空）：")
+    hint = QLabel(t("正確答案（照畫面上選到的範圍，改成正確的文字；不確定就清空）："))
     hint.setWordWrap(True)
     lay.addWidget(hint)
     edit = QPlainTextEdit(default)
@@ -127,7 +129,7 @@ class Worker:
 
     def _run(self):
         try:
-            t = time.perf_counter()
+            t0 = time.perf_counter()
             from . import inkcols, layout
             from .layout import build_layout
             from .recognize import Recognizer
@@ -139,17 +141,17 @@ class Worker:
             self._extract, self._build_layout = extract, build_layout
             self.rec = Recognizer()
             self.rec.warmup()
-            analysis.tokenize("準備できました")
+            analysis.tokenize("準備できました")  # i18n: 不翻
             analysis.jlpt_table()
-            extract(["準備できました。計画を練り直して読み始めた。"], self.dictionary)  # 第一次查字要載入文法規則、中文意思（約 0.15 秒）
+            extract(["準備できました。計画を練り直して読み始めた。"], self.dictionary)  # 第一次查字要載入文法規則、中文意思（約 0.15 秒）  # i18n: 不翻
             self.ready = True
-            msg = (f"就緒（載入 {time.perf_counter() - t:.0f} 秒，文字偵測用 {self.rec.det_device}、"
-                   f"辨識用 {self.rec.rec_device}）")
+            msg = t("就緒（載入 {sec:.0f} 秒，文字偵測用 {det}、辨識用 {rec}）",
+                    sec=time.perf_counter() - t0, det=self.rec.det_device, rec=self.rec.rec_device)
             log.info(msg)
             self.bridge.ready.emit(msg)
         except Exception:
             log.exception("載入模型失敗")
-            self.bridge.ready.emit("載入失敗，詳見 logs/jplens.log")
+            self.bridge.ready.emit(t("載入失敗，詳見 logs/jplens.log"))
             return
         while True:
             kind, job_id, *args = self._next()
@@ -179,7 +181,7 @@ class Worker:
                 if found:
                     lines, band = found
                     bands.append(band)
-                    note = f"（小字放大重新偵測 {time.perf_counter() - t_z:.2f} 秒）"
+                    note = f"（小字放大重新偵測 {time.perf_counter() - t_z:.2f} 秒）"  # i18n: 不翻
             if text_mode and inkcols.ENABLED:
                 inkcols.prewarm(img, lines, x, y)
         log.info("版面 %dx%d：%d 行、%.2f 秒%s%s", img.shape[1], img.shape[0], len(lines), time.perf_counter() - t,
@@ -359,6 +361,9 @@ class App:
         from .vocab import SAVED_NAME
         self.qapp = qapp
         self.cfg = Config.load()
+        if not CONFIG_PATH.exists():  # 存下預設的語言：下次啟動有 logs/ 了，沒有設定檔會被當成改預設以前的使用者
+            self.cfg.save()
+        lang.set_explain(self.cfg.explain_lang)
         self.dictionary = Dictionary()
         self.vocab = VocabStore(self.cfg.vocab_path / SAVED_NAME)
         self.vocab.dictionary = self.dictionary  # 舊紀錄沒有「也讀」時補查
@@ -417,15 +422,15 @@ class App:
         self.popup.requery_requested.connect(lambda texts: self._requery(texts, self.popup))
 
         self.tray = QSystemTrayIcon(make_icon())
-        self.status_action = QAction("模型載入中…")
+        self.status_action = QAction(t("模型載入中…"))
         self.status_action.setEnabled(False)
         menu = QMenu()
         menu.addAction(self.status_action)
         menu.addSeparator()
         group = QActionGroup(menu)
         self.mode_actions = {}
-        for mode, label in (("text", "反白模式（沿著文字拖曳選字）"), ("box", "框選模式（拖曳出矩形）"),
-                            ("manga", "漫畫模式（框選對話框，或雙擊對話框）")):
+        for mode, label in (("text", t("反白模式（沿著文字拖曳選字）")), ("box", t("框選模式（拖曳出矩形）")),
+                            ("manga", t("漫畫模式（框選對話框，或雙擊對話框）"))):
             act = QAction(label, group, checkable=True)
             act.setChecked(self.cfg.select_mode == mode)
             act.triggered.connect(lambda _=False, m=mode: self.set_mode(m))
@@ -437,24 +442,24 @@ class App:
         self._listen_text()
         menu.addAction(self.listen_action)
         menu.addSeparator()
-        menu.addAction("單字本…", self.open_manager)
-        export = menu.addMenu("匯出")
-        export.addAction("單字（單字 App 備份檔）…", lambda: self.export("words"))
-        export.addAction("記錄的句子（編號文字檔）…", lambda: self.export("sentences"))
-        menu.addAction("設定…", self.open_settings)
+        menu.addAction(t("單字本…"), self.open_manager)
+        export = menu.addMenu(t("匯出"))
+        export.addAction(t("單字（單字 App 備份檔）…"), lambda: self.export("words"))
+        export.addAction(t("記錄的句子（編號文字檔）…"), lambda: self.export("sentences"))
+        menu.addAction(t("設定…"), self.open_settings)
         from .elevate import is_admin
         self.admin = is_admin()
         if not self.admin:  # 以系統管理員身分執行的遊戲裡要用（elevate.py）
-            menu.addAction("以系統管理員身分重新啟動（遊戲裡要用）", self.restart_as_admin)
-        menu.addAction("保存上一次查詢的畫面（填正確答案，當測試資料）", self.save_last_capture)
+            menu.addAction(t("以系統管理員身分重新啟動（遊戲裡要用）"), self.restart_as_admin)
+        menu.addAction(t("保存上一次查詢的畫面（填正確答案，當測試資料）"), self.save_last_capture)
         menu.addSeparator()
-        menu.addAction("結束", self.quit)
+        menu.addAction(t("結束"), self.quit)
         self._menu = menu
         self.tray.setContextMenu(menu)
         # 左鍵點圖示也跳出選單（預設只有右鍵）
         self.tray.activated.connect(
             lambda reason: menu.popup(QCursor.pos()) if reason == QSystemTrayIcon.Trigger else None)
-        self.tray.setToolTip("螢幕查字：模型載入中…")
+        self.tray.setToolTip(t("螢幕查字：模型載入中…"))
         self.tray.show()
 
         self.worker = Worker(b, self.dictionary, self.cfg)
@@ -469,7 +474,7 @@ class App:
             self._fg_timer = QTimer(interval=2000, timeout=self._check_foreground)
             self._fg_timer.start()
         if not self.dictionary.ok:
-            self.tray.showMessage("螢幕查字", "找不到字典 data/dict.sqlite，請先執行 tools/build_dict.py",
+            self.tray.showMessage(t("螢幕查字"), t("找不到字典 data/dict.sqlite，請先執行 tools/build_dict.py"),
                                   QSystemTrayIcon.Warning)
 
     # ---------------------------------------------------------------- 模式
@@ -485,7 +490,7 @@ class App:
         order = list(MODES)
         mode = order[(order.index(self.cfg.select_mode) + 1) % len(order)]
         self.set_mode(mode)
-        QToolTip.showText(phys_to_logical(x, y) + QPoint(16, 16), f"切換到「{MODES[mode][0]}」模式", None, QRect(), 1500)
+        QToolTip.showText(phys_to_logical(x, y) + QPoint(16, 16), t("切換到「{mode}」模式", mode=MODES[mode][0]), None, QRect(), 1500)
 
     def _sync_mode_menu(self, mode):
         self.mode_actions[mode].setChecked(True)
@@ -559,7 +564,7 @@ class App:
             with mss.mss() as sct:  # mss 物件不能跨執行緒：這裡另外開一個只用來數螢幕
                 single = len(sct.monitors) == 2  # monitors[0] 是所有螢幕合起來；只有一個實體螢幕
             if not single:
-                raise RuntimeError("多螢幕")
+                raise RuntimeError("多螢幕")  # i18n: 不翻
             import dxcam
             cam = dxcam.create(output_color="BGR")
             self._dx_last = cam.grab()
@@ -691,7 +696,8 @@ class App:
         self.spinner.stop("layout")
         if self.worker.bubble_error and not self._bubble_warned:
             self._bubble_warned = True
-            self.tray.showMessage("螢幕查字", "漫畫模式的模型載入失敗，先用一般框選的方式讀：" + self.worker.bubble_error,
+            self.tray.showMessage(t("螢幕查字"),
+                                  t("漫畫模式的模型載入失敗，先用一般框選的方式讀：{err}", err=self.worker.bubble_error),
                                   QSystemTrayIcon.Warning, 5000)
         if self._pending and self._pending[0] == layout_id:
             (_, fn, args), self._pending = self._pending, None
@@ -724,7 +730,7 @@ class App:
             if d["box"] and d["box"][2] - d["box"][0] >= MIN_BOX and d["box"][3] - d["box"][1] >= MIN_BOX:
                 self._select_box(*d["box"])
             elif d["pending"]:
-                self._show_error("沒有選到文字。")
+                self._show_error(t("沒有選到文字。"))
             return
         rects = [s.abs_rect(d["lines"][g.line].rect(g.a, g.b)) for g in d["segs"]]
         x0, y0 = min(r[0] for r in rects), min(r[1] for r in rects)
@@ -744,7 +750,7 @@ class App:
     def _show_busy(self, x0, y0, x1, y1):
         if not self.popup.isVisible():  # 已開啟就留在原處（使用者可能拖到習慣的位置）
             self.popup.place_near(x0, y0, x1, y1)
-        self.popup.show_busy("辨識中…" if self.worker.ready else "模型載入中，載入完成後會自動辨識…")
+        self.popup.show_busy(t("辨識中…") if self.worker.ready else t("模型載入中，載入完成後會自動辨識…"))
         self.spinner.start("query")
 
     def _show_error(self, msg):
@@ -789,7 +795,7 @@ class App:
         if not hits:
             if not self.popup.isVisible():
                 self.popup.place_near(x, y, x + 1, y + 1)
-            self._show_error("這裡沒有找到漫畫的字。可以按住 Alt 拖曳框起來試試。")
+            self._show_error(t("這裡沒有找到漫畫的字。可以按住 Alt 拖曳框起來試試。"))
             return
         b = hits[0]
         self._read_bubbles(s, hits, s.abs_rect((b.x0, b.y0, b.x1, b.y1)), {"point": s.rel(x, y)})
@@ -837,7 +843,7 @@ class App:
             if s.img[ry0:ry1, rx0:rx1].max() < 8:
                 if not self.popup.isVisible():
                     self.popup.place_near(x0, y0, x1, y1)
-                self._show_error("擷取到的是全黑畫面。如果是全螢幕遊戲，請改成「無邊框視窗」或「視窗」模式再試。")
+                self._show_error(t("擷取到的是全黑畫面。如果是全螢幕遊戲，請改成「無邊框視窗」或「視窗」模式再試。"))
                 return
             self._show_busy(x0, y0, x1, y1)
             # 怎麼讀（layout.plan_box：找欄、小字放大重新偵測）在背景決定，主執行緒不用等
@@ -850,7 +856,7 @@ class App:
             if not self.popup.isVisible():
                 self.popup.place_near(x0, y0, x1, y1)
             # 獨占全螢幕的遊戲用一般方式擷取會得到全黑畫面
-            self._show_error("擷取到的是全黑畫面。如果是全螢幕遊戲，請改成「無邊框視窗」或「視窗」模式再試。")
+            self._show_error(t("擷取到的是全黑畫面。如果是全螢幕遊戲，請改成「無邊框視窗」或「視窗」模式再試。"))
             return
         self._show_busy(x0, y0, x1, y1)
         self.worker.submit("box", self.job_id, img)
@@ -858,20 +864,28 @@ class App:
     # ---------------------------------------------------------------- 結果
     def on_ready(self, msg):
         hk = self.cfg.hotkey_name
-        how = "沿著文字拖曳反白" if self.text_mode else "拖曳框選（漫畫模式也可以雙擊對話框）" if self.manga_mode else "拖曳框選"
         self.spinner.stop("model")
         self._preload_bubbles()
         QTimer.singleShot(0, self.popup.warm_up)  # 第一次出結果不要卡（載入字型，約 0.3 秒）
         if self.admin:
-            msg += "（系統管理員）"
+            msg += t("（系統管理員）")
         self.status_action.setText(msg)
-        self.tray.setToolTip(f"螢幕查字：{msg}\n按住 {hk} {how}")
-        self.tray.showMessage("螢幕查字", f"{msg}。按住 {hk} 用滑鼠{how}日文。", QSystemTrayIcon.Information, 3000)
+        # 三種模式各一句完整的句子（英文的語序和中文不同，不用片段拼）
+        if self.text_mode:
+            tip, note = (t("按住 {hk} 沿著文字拖曳反白", hk=hk),
+                         t("{msg}。按住 {hk} 用滑鼠沿著文字拖曳反白日文。", msg=msg, hk=hk))
+        elif self.manga_mode:
+            tip, note = (t("按住 {hk} 拖曳框選（漫畫模式也可以雙擊對話框）", hk=hk),
+                         t("{msg}。按住 {hk} 用滑鼠拖曳框選日文（漫畫模式也可以雙擊對話框）。", msg=msg, hk=hk))
+        else:
+            tip, note = (t("按住 {hk} 拖曳框選", hk=hk), t("{msg}。按住 {hk} 用滑鼠拖曳框選日文。", msg=msg, hk=hk))
+        self.tray.setToolTip(t("螢幕查字：{msg}", msg=msg) + "\n" + tip)
+        self.tray.showMessage(t("螢幕查字"), note, QSystemTrayIcon.Information, 3000)
 
     def _requery(self, texts, target):
         """target：結果顯示在哪個視窗（查字視窗 popup 或無字幕視窗 listen_win）。"""
         if not self.worker.ready:
-            target.status.setText("模型還在載入，等一下再按")
+            target.status.setText(t("模型還在載入，等一下再按"))
             return
         self.job_id += 1
         self._requery_job = self.job_id
@@ -886,7 +900,7 @@ class App:
             target = self._requery_target or self.popup
             if target is self.popup:
                 self._corrected = "\n".join(texts)
-            target.show_result(texts, words, sec, "查詢" if target is not self.popup else "重查")
+            target.show_result(texts, words, sec, t("查詢") if target is not self.popup else t("重查"))
             return
         if job_id == self.job_id:
             self._corrected = None
@@ -894,18 +908,18 @@ class App:
                 self._last = (self._last[0], payload[0], self._last[2])
             self.spinner.stop("query")
             texts, words, sec = payload
-            detail = f"辨識 {sec:.2f}"
+            detail = t("辨識 {sec:.2f}", sec=sec)
             if self._t_release:  # 顯示實際等了多久（放開滑鼠到出結果），括號裡是時間花在哪
                 total = time.perf_counter() - self._t_release
                 if total - sec >= 0.05:  # 放開時版面還沒偵測完（或模型還在載入）
-                    detail += f"、等版面 {total - sec:.2f}"
+                    detail = t("辨識 {sec:.2f}、等版面 {wait:.2f}", sec=sec, wait=total - sec)
                 log.info("放開滑鼠到顯示結果 %.2f 秒（%s）", total, detail)
                 sec, self._t_release = total, None
             self.popup.show_result(texts, words, sec, detail)
 
     def on_failed(self, job_id, msg):
         if job_id == self.job_id:
-            self._show_error("辨識失敗：" + msg.strip().splitlines()[-1])
+            self._show_error(t("辨識失敗：{err}", err=msg.strip().splitlines()[-1]))
 
     def on_click(self, x, y):
         """點了結果視窗外面就關掉。不關：結果視窗的級數下拉選單、右鍵選單開著（選單常超出視窗範圍）、
@@ -916,7 +930,7 @@ class App:
 
     # ---------------------------------------------------------------- 無字幕模式
     def _listen_text(self):
-        self.listen_action.setText(f"無字幕模式：聽電腦的聲音轉成文字（{self.cfg.listen_name}）")
+        self.listen_action.setText(t("無字幕模式：聽電腦的聲音轉成文字（{key}）", key=self.cfg.listen_name))
 
     def toggle_listen(self):
         if self.listening:
@@ -943,7 +957,7 @@ class App:
         self.popup.hide()
         self.listen_win.start(self.cfg.listen_name)
         if not listen.model_ready():
-            self._on_listen_state(self.listener, f"找不到語音辨識模型（{listen.ASR_DIR}）", True)
+            self._on_listen_state(self.listener, t("找不到語音辨識模型（{dir}）", dir=listen.ASR_DIR), True)
             return
         if self.listener is None:
             lst = listen.Listener(lambda h: self.bridge.heard.emit(lst, h),
@@ -982,17 +996,17 @@ class App:
         """無字幕視窗的「保存聲音」：最近 2 分鐘有聲音的部分（wav）和這段時間辨識出的句子（同名 txt），當測試資料。"""
         w = self.listen_win
         if self.listener is None:
-            w.status.setText("沒有在聆聽，沒有聲音可以存")
+            w.status.setText(t("沒有在聆聽，沒有聲音可以存"))
             return
         folder = CAPTURE_DIR / "audio"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / time.strftime("%Y%m%d_%H%M%S.wav")
         sec = self.listener.save_recent(path)
         if not sec:
-            w.status.setText("還沒聽到任何聲音，沒有東西可以存")
+            w.status.setText(t("還沒聽到任何聲音，沒有東西可以存"))
             return
         log.info("保存無字幕模式的聲音：%s（%.0f 秒）", path, sec)
-        w.status.setText(f"已保存最近 {sec:.0f} 秒的聲音：{path.name}")
+        w.status.setText(t("已保存最近 {sec:.0f} 秒的聲音：{name}", sec=sec, name=path.name))
         w.status.setToolTip(str(path))
 
     # ---------------------------------------------------------------- 單字本、設定
@@ -1025,8 +1039,10 @@ class App:
         from .manager import ExportDialog
         dlg = ExportDialog(None, kind, self.vocab, self.cfg)
         if dlg.exec():
-            extra = f"（重點單字 {dlg.marked} 個）" if kind == "words" else ""
-            self.tray.showMessage("螢幕查字", f"已匯出 {dlg.count}{dlg.unit}{extra}到 {dlg.out.name}",
+            extra = t("（重點單字 {n} 個）", n=dlg.marked) if kind == "words" else ""
+            self.tray.showMessage(t("螢幕查字"),
+                                  t("已匯出 {count}{unit}{extra}到 {name}", count=dlg.count, unit=dlg.unit, extra=extra,
+                                    name=dlg.out.name),
                                   QSystemTrayIcon.Information, 3000)
 
     def _check_foreground(self):
@@ -1037,9 +1053,10 @@ class App:
             self._elevated_warned.add(key)
             log.info("前景程式以較高權限執行，掛鉤收不到按鍵：%s", name or "（查不到名稱）")
             self.tray.showMessage(
-                "螢幕查字：這個程式裡不能用",
-                f"{name or '目前的程式'} 以系統管理員身分執行，查字工具收不到按鍵。\n"
-                "到系統匣選單按「以系統管理員身分重新啟動」，或在設定 → 一般打開「以系統管理員身分執行」。",
+                t("螢幕查字：這個程式裡不能用"),
+                t("{name} 以系統管理員身分執行，查字工具收不到按鍵。\n"
+                  "到系統匣選單按「以系統管理員身分重新啟動」，或在設定 → 一般打開「以系統管理員身分執行」。",
+                  name=name or t("目前的程式")),
                 QSystemTrayIcon.Warning, 8000)
 
     def restart_as_admin(self):
@@ -1055,7 +1072,7 @@ class App:
             self.hook.hotkey_vks = list(cfg.hotkey_vks)
             self.hook.listen_vk = ord(cfg.listen_key)
             self._listen_text()
-            self.tray.setToolTip(f"螢幕查字：{self.status_action.text()}\n按住 {cfg.hotkey_name} 用滑鼠選取日文")
+            self.tray.setToolTip(t("螢幕查字：{msg}\n按住 {hk} 用滑鼠選取日文", msg=self.status_action.text(), hk=cfg.hotkey_name))
         elif key == "mode_key":
             self.hook.on_mode = self.bridge.mode_key.emit if cfg.mode_key else None
         elif key == "show_spinner":
@@ -1074,6 +1091,8 @@ class App:
                 self.listener.tr.partial_every = listen.PARTIAL_EVERY if cfg.listen_partial else 0
         elif key == "preload_manga":
             self._preload_bubbles()
+        elif key == "explain_lang":
+            lang.set_explain(cfg.explain_lang)
         elif key == "vocab_dir":
             from .vocab import SAVED_NAME
             self.vocab.set_path(cfg.vocab_path / SAVED_NAME)
@@ -1088,7 +1107,7 @@ class App:
         當測試資料（tests/eval/box_eval.py 會把有正確答案的都拿來測）。
         存之前問正確答案：預設填辨識出的文字，改成正確的再按確定；不知道就留空。"""
         if not self._last:
-            self.tray.showMessage("螢幕查字", "還沒有查詢過。", QSystemTrayIcon.Information, 2000)
+            self.tray.showMessage(t("螢幕查字"), t("還沒有查詢過。"), QSystemTrayIcon.Information, 2000)
             return
         import json
         import cv2
@@ -1102,7 +1121,7 @@ class App:
         cv2.imencode(".png", img)[1].tofile(str(path))
         path.with_suffix(".json").write_text(json.dumps({**info, "ocr": texts or [], "truth": truth},
                                                         ensure_ascii=False, indent=2), encoding="utf-8")
-        self.tray.showMessage("螢幕查字", f"已保存到 {path.name}" + ("" if truth else "（沒有正確答案）"),
+        self.tray.showMessage(t("螢幕查字"), t("已保存到 {name}", name=path.name) + ("" if truth else t("（沒有正確答案）")),
                               QSystemTrayIcon.Information, 2000)
         log.info("保存畫面：%s（正確答案：%s）", path, truth)
 
@@ -1127,8 +1146,8 @@ def selftest() -> int:
         t = time.perf_counter()
         rec = Recognizer()
         rec.warmup()
-        out.append(f"載入 {time.perf_counter() - t:.1f} 秒；偵測 {rec.det_device}、辨識 {rec.rec_device}")
-        sample = "日本語を勉強しています"
+        out.append(f"載入 {time.perf_counter() - t:.1f} 秒；偵測 {rec.det_device}、辨識 {rec.rec_device}")  # i18n: 不翻
+        sample = "日本語を勉強しています"  # i18n: 不翻
         qi = QImage(900, 160, QImage.Format_RGB888)
         qi.fill(QColor("white"))
         p = QPainter(qi)
@@ -1141,15 +1160,15 @@ def selftest() -> int:
         img = arr.reshape(qi.height(), qi.width(), 3)[:, :, ::-1].copy()  # RGB → BGR
         t = time.perf_counter()
         text = rec.read_whole(img)
-        out.append(f"辨識：{text}（{time.perf_counter() - t:.2f} 秒）")
+        out.append(f"辨識：{text}（{time.perf_counter() - t:.2f} 秒）")  # i18n: 不翻
         words = extract([text], Dictionary())
-        out.append("單字：" + "、".join(f"{w.word}【{w.reading}】{w.jlpt} {w.meaning}" for w in words[:5]))
+        out.append("單字：" + "、".join(f"{w.word}【{w.reading}】{w.jlpt} {w.meaning}" for w in words[:5]))  # i18n: 不翻
         ok = text.replace(" ", "") == sample and bool(words)
         # 翻譯與講解（不連網）：Gemini 套件、keyring 的 Windows 認證管理員後端都有帶進去
         import keyring
         from google import genai  # noqa: F401
         backend = type(keyring.get_keyring()).__module__
-        out.append(f"Gemini 套件 OK；keyring 後端：{backend}")
+        out.append(f"Gemini 套件 OK；keyring 後端：{backend}")  # i18n: 不翻
         ok = ok and "Windows" in backend
         # 無字幕模式（不錄音）：模型、sherpa-onnx、pyaudiowpatch 都有帶進去，辨識一段靜音不會出錯
         from . import listen
@@ -1161,22 +1180,22 @@ def selftest() -> int:
         ok = ok and (len(slow) > 60000 or r == 32000)
         from .listen_ui import ListenWindow
         ListenWindow(Config(), type("V", (), {"listeners": []})(), "").deleteLater()  # 視窗建得起來
-        out.append(f"無字幕模式：模型 {'OK' if listen.model_ready() else '找不到'}、sherpa-onnx、pyaudiowpatch OK；"
-                   f"倍速放慢用{'PyAV atempo' if listen._atempo_ok else '調整取樣率'}")
+        out.append(f"無字幕模式：模型 {'OK' if listen.model_ready() else '找不到'}、sherpa-onnx、pyaudiowpatch OK；"  # i18n: 不翻
+                   f"倍速放慢用{'PyAV atempo' if listen._atempo_ok else '調整取樣率'}")  # i18n: 不翻
         ok = ok and listen.model_ready()
         # 單字測驗：語意模型（tokenizers＋onnxruntime）有帶進去，同義的分數高、無關的低
         import tempfile
         from pathlib import Path
         from . import quiz
         sem = quiz.Semantic(cache=Path(tempfile.mkdtemp()) / "v.npz")
-        v = sem.vectors(["即刻", "即時", "窗戶"])
-        same, other = float(v["即刻"] @ v["即時"]), float(v["即刻"] @ v["窗戶"])
-        out.append(f"單字測驗：語意模型 {'OK' if sem.ok else '找不到'}（即刻／即時 {same:.2f}、即刻／窗戶 {other:.2f}）")
+        v = sem.vectors(["即刻", "即時", "窗戶"])  # i18n: 不翻
+        same, other = float(v["即刻"] @ v["即時"]), float(v["即刻"] @ v["窗戶"])  # i18n: 不翻
+        out.append(f"單字測驗：語意模型 {'OK' if sem.ok else '找不到'}（即刻／即時 {same:.2f}、即刻／窗戶 {other:.2f}）")  # i18n: 不翻
         ok = ok and sem.ok and same >= quiz.SAME_SIM > other
         # 單字本的朗讀：Qt 的語音外掛有帶進去（有沒有日文語音看那台電腦，不算失敗）
         from PySide6.QtTextToSpeech import QTextToSpeech
         engines = [e for e in QTextToSpeech.availableEngines() if e != "mock"]
-        out.append(f"朗讀：語音引擎 {'、'.join(engines) or '沒有'}")
+        out.append(f"朗讀：語音引擎 {'、'.join(engines) or '沒有'}")  # i18n: 不翻
         ok = ok and "winrt" in engines
     except Exception:
         out.append(traceback.format_exc())
@@ -1211,7 +1230,7 @@ def main():
             if ok:
                 break
     if not ok:
-        QMessageBox.warning(None, "螢幕查字", "已經在執行了（請看右下角系統匣的「字」圖示）。")
+        QMessageBox.warning(None, t("螢幕查字"), t("已經在執行了（請看右下角系統匣的「字」圖示）。"))
         return
     app = App(qapp)  # noqa: F841（要保持參考）
     sys.exit(qapp.exec())
