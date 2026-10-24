@@ -251,6 +251,11 @@ In the packaged build, `config.json`, `vocab/` and `logs/` sit next to `jplens.e
 - Grammar rules: 531 in total — 228 from the original project, the other 303 written by Gemini from a JLPT pattern list, verified automatically and
   spot-checked by hand.
 
+## Support
+
+jplens is free and open source, and will stay that way. If it helps your Japanese, you can buy me a coffee on
+[Ko-fi](https://ko-fi.com/charlie1206) — completely optional. Bug reports, suggestions and stars are just as welcome.
+
 ## License and credits
 
 The code is licensed under the Apache License 2.0 ([LICENSE](LICENSE)). Dictionary data is licensed differently (mostly CC BY-SA 4.0); see
@@ -512,6 +517,11 @@ python packaging/update_install.py C:\jplens                             # 把�
 
 中文依序：Gemini 翻譯（日檢單字表的詞，逐個 JMdict 意思翻譯，`dict_translate/zh.jsonl`）→ Tomoshi 開放資料 → 中文維基詞典；
 都沒有才顯示 JMdict 的英文意思（標示〔英〕）。文法規則 531 條：228 條是專案原本的規則，其餘 303 條由 Gemini 依 JLPT 句型清單寫成、經自動驗證與人工抽查。
+
+## 支持這個專案
+
+jplens 免費、開源，以後也會一直是這樣。如果它對你學日文有幫助，可以到 [Ko-fi](https://ko-fi.com/charlie1206) 請我喝杯咖啡（完全自由）。
+回報問題、提建議、按個星星也一樣是很大的鼓勵。
 
 ## 授權與來源
 
